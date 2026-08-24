@@ -4445,7 +4445,9 @@ function createActiveBackend(backendArgs) {
 function resolveHermesBackend(backendArgs) {
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
-  const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
+  const localSourceRoot = '/Users/iulian/workspace/code/personal/hermes-agent'
+  const configuredRoot = process.env.HERMES_DESKTOP_HERMES_ROOT || localSourceRoot
+  const overrideRoot = path.resolve(configuredRoot)
 
   if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
     const backend = createPythonBackend(overrideRoot, `Hermes source at ${overrideRoot}`, backendArgs)
@@ -8300,6 +8302,27 @@ function installRemoteHeaderRules() {
     }
 
     callback({ requestHeaders: { ...details.requestHeaders, ...headers } })
+  })
+}
+
+function installLocalOnlyNetworkPolicy() {
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    try {
+      const requestUrl = new URL(details.url)
+
+      if (!['http:', 'https:', 'ws:', 'wss:'].includes(requestUrl.protocol)) {
+        callback({})
+
+        return
+      }
+
+      const hostname = requestUrl.hostname.toLowerCase()
+      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+
+      callback({ cancel: !isLoopback })
+    } catch {
+      callback({ cancel: true })
+    }
   })
 }
 
@@ -15045,6 +15068,7 @@ app.whenReady().then(() => {
   installDownloadHandling()
   registerMediaProtocol()
   installEmbedReferer()
+  installLocalOnlyNetworkPolicy()
   installRemoteHeaderRules()
   registerDeepLinkProtocol()
 

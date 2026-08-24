@@ -24,7 +24,7 @@ import {
   setRememberedSessionId
 } from '@/store/session'
 import { onSessionsChanged } from '@/store/session-sync'
-import { openUpdatesWindow, startUpdatePoller, stopUpdatePoller } from '@/store/updates'
+import { openUpdatesWindow } from '@/store/updates'
 import { isHudWindow, isSecondaryWindow } from '@/store/windows'
 import type { SessionInfo } from '@/types/hermes'
 
@@ -65,11 +65,9 @@ export function useDesktopIntegrations({
   runtimeIdByStoredSessionId,
   sessions
 }: DesktopIntegrationsParams): void {
-  // Update polling — populates $desktopVersion/$updateStatus, which feed the
-  // statusbar version pill and the update toasts. Also honors the main
-  // process's "open updates" menu request.
+  // Passive update polling is disabled in this local privacy-hardened build.
+  // The explicit "Check for Updates" menu action remains available.
   useEffect(() => {
-    startUpdatePoller()
     // Background MCP health: HTTP/SSE servers only (never spawns stdio),
     // notifies on transitions into needs-auth/error with a Sign in action.
     startMcpHealthChecker()
@@ -77,7 +75,6 @@ export function useDesktopIntegrations({
 
     return () => {
       unsubscribe?.()
-      stopUpdatePoller()
       stopMcpHealthChecker()
     }
   }, [])

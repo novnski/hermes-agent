@@ -15,8 +15,8 @@ const modeCodec: Codec<EmbedMode> = {
   encode: value => value
 }
 
-/** Global default: ask (placeholder), always (auto-load), off (plain link). */
-export const $embedMode = persistentAtom<EmbedMode>(MODE_KEY, 'ask', modeCodec)
+/** Privacy-hardened local default: off (plain link); ask/always remain user-selectable. */
+export const $embedMode = persistentAtom<EmbedMode>(MODE_KEY, 'off', modeCodec)
 /** Providers granted a standing "always allow" (e.g. `youtube`, `twitter`). */
 export const $embedAllowed = persistentAtom<string[]>(ALLOWED_KEY, [], Codecs.stringArray)
 
