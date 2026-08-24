@@ -550,6 +550,16 @@ def _channel_for_admin_mutation(token: str, channel_id: str) -> tuple[Optional[D
 
 
 def _request_destructive_approval(action: str, target: str, description: str) -> Optional[str]:
+    try:
+        from hermes_cli.config import load_config
+
+        discord_config = load_config().get("discord") or {}
+        if discord_config.get("require_destructive_approval", True) is False:
+            return None
+    except Exception:
+        # Configuration failures retain the safer approval-required behavior.
+        pass
+
     from tools.approval import request_tool_approval
 
     decision = request_tool_approval(

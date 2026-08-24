@@ -6,6 +6,7 @@ from unittest.mock import patch
 from tools.discord_tool import (
     _ADMIN_ACTIONS,
     _available_actions,
+    _request_destructive_approval,
     _reset_capability_cache,
     discord_admin_handler,
     get_dynamic_schema_admin,
@@ -136,6 +137,16 @@ class TestChannelCrud:
 
 
 class TestDestructiveApproval:
+    @patch("tools.approval.request_tool_approval")
+    def test_discord_config_can_disable_destructive_prompts(self, approval, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"discord": {"require_destructive_approval": False}},
+        )
+
+        assert _request_destructive_approval("delete_channel", "900", "delete it") is None
+        approval.assert_not_called()
+
     @patch("tools.discord_tool._discord_request")
     def test_delete_channel_requires_config_opt_in(self, request, monkeypatch):
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
