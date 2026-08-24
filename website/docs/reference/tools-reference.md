@@ -322,7 +322,7 @@ Registered on the `hermes-discord` platform toolset. Moderation actions require 
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
-| `discord_admin` | Manage a Discord server via the REST API: list guilds/channels/roles, create/edit/delete channels, manage role grants, timeouts, kicks, and bans. | `DISCORD_BOT_TOKEN` + bot permissions |
+| `discord_admin` | Manage a Discord server via the REST API: inspect guilds/channels/roles, create/edit/delete channels and categories, manage channel permission overwrites, pin/delete messages, create threads, and grant/remove existing roles. Permanent deletions require explicit configuration and a live human approval. | `DISCORD_BOT_TOKEN` + bot permissions |
 
 ## `spotify` toolset
 
@@ -349,5 +349,4 @@ Registered only on the `hermes-yuanbao` platform toolset. Yuanbao is Tencent's c
 | `yb_send_dm` | Send a private/direct message to a user in a group, with optional media files. | Yuanbao credentials |
 | `yb_search_sticker` | Search the built-in Yuanbao sticker (TIM face) catalogue by keyword. | Yuanbao credentials |
 | `yb_send_sticker` | Send a built-in sticker to the current Yuanbao chat. | Yuanbao credentials |
-
 

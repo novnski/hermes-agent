@@ -402,6 +402,43 @@ If a thread's parent channel is in this list, the thread also becomes mention-fr
 
 Free-response channels also **skip auto-threading** — the bot replies inline rather than spinning off a new thread per message. This keeps the channel usable as a lightweight chat surface. If you want threading behavior, don't list the channel as free-response (use normal `@mention` flow instead).
 
+#### `discord.admin_guild_ids`
+
+**Type:** string or list — **Default:** unrestricted
+
+Optional hard scope for Discord server mutations. When configured, channel and
+permission-overwrite mutations fail closed outside the listed guild IDs, even
+if the bot is later invited to another server with administrator permissions.
+
+```yaml
+discord:
+  admin_guild_ids:
+    - "1472272343513563300"
+```
+
+#### `discord.server_actions`
+
+**Type:** string or list — **Default:** all non-destructive actions
+
+Allowlist for the actions visible on the `discord` and `discord_admin` tools.
+Omit it or use an empty string to expose every non-destructive action. An empty
+list disables every Discord REST action. Permanent actions such as
+`delete_channel` and `delete_channel_permission` remain hidden unless named
+explicitly, and every invocation still requires a live human approval.
+
+```yaml
+discord:
+  server_actions:
+    - list_guilds
+    - list_channels
+    - create_category
+    - create_channel
+    - update_channel
+    - set_channel_permission
+    - delete_channel
+    - delete_channel_permission
+```
+
 #### `discord.auto_thread`
 
 **Type:** boolean — **Default:** `true`
@@ -927,5 +964,4 @@ Leave `everyone` and `roles` at `false` unless you know exactly why you need the
 :::
 
 For more information on securing your Hermes Agent deployment, see the [Security Guide](../security.md).
-
 

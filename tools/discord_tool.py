@@ -52,6 +52,16 @@ _FLAG_GATEWAY_GUILD_MEMBERS_LIMITED = 1 << 15
 _FLAG_GATEWAY_MESSAGE_CONTENT = 1 << 18
 _FLAG_GATEWAY_MESSAGE_CONTENT_LIMITED = 1 << 19
 
+_UNSET = object()
+
+# Permanent server-state deletion never appears just because discord_admin is
+# enabled. The operator must name these actions in discord.server_actions, and
+# each invocation still passes through Hermes' human approval gate.
+_EXPLICIT_OPT_IN_ACTIONS = frozenset({
+    "delete_channel",
+    "delete_channel_permission",
+})
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -150,6 +160,46 @@ _CHANNEL_TYPE_NAMES = {
 
 def _channel_type_name(type_id: int) -> str:
     return _CHANNEL_TYPE_NAMES.get(type_id, f"unknown({type_id})")
+
+
+_CHANNEL_NAME_TO_TYPE = {
+    "text": 0,
+    "voice": 2,
+    "category": 4,
+    "announcement": 5,
+    "forum": 15,
+    "media": 16,
+}
+
+
+def _channel_type_id(channel_type: Any) -> int:
+    """Accept Discord channel type names or raw integer IDs."""
+    if channel_type in (None, ""):
+        return 0
+    if isinstance(channel_type, int):
+        if channel_type in _CHANNEL_TYPE_NAMES:
+            return channel_type
+        raise ValueError(f"Unsupported Discord channel type id: {channel_type}")
+    value = str(channel_type).strip().lower()
+    if value.isdigit() and int(value) in _CHANNEL_TYPE_NAMES:
+        return int(value)
+    if value in _CHANNEL_NAME_TO_TYPE:
+        return _CHANNEL_NAME_TO_TYPE[value]
+    allowed = ", ".join(sorted(_CHANNEL_NAME_TO_TYPE))
+    raise ValueError(f"Unsupported channel_type '{channel_type}'. Use one of: {allowed}")
+
+
+def _channel_summary(channel: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": channel.get("id"),
+        "name": channel.get("name"),
+        "type": _channel_type_name(channel.get("type", -1)),
+        "guild_id": channel.get("guild_id"),
+        "topic": channel.get("topic"),
+        "position": channel.get("position"),
+        "parent_id": channel.get("parent_id"),
+        "nsfw": channel.get("nsfw", False),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +500,228 @@ def _channel_info(token: str, channel_id: str, **_kwargs: Any) -> str:
     })
 
 
+def _load_admin_guild_ids() -> Optional[set[str]]:
+    """Return the configured Discord admin-guild scope, if any."""
+    try:
+        from hermes_cli.config import load_config
+
+        raw = (load_config().get("discord") or {}).get("admin_guild_ids")
+    except Exception as exc:
+        logger.debug("discord: could not load admin guild scope (%s)", exc)
+        return None
+
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, str):
+        values = [value.strip() for value in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(value).strip() for value in raw]
+    else:
+        logger.warning("discord.admin_guild_ids has unsupported type %s", type(raw).__name__)
+        return set()
+    return {value for value in values if value.isdigit() and int(value) > 0}
+
+
+def _require_admin_guild(guild_id: str) -> Optional[str]:
+    allowed = _load_admin_guild_ids()
+    if allowed is None:
+        return None
+    if guild_id in allowed:
+        return None
+    return tool_error(
+        "Discord admin mutation blocked: target guild is outside "
+        "discord.admin_guild_ids.",
+        target_guild_id=guild_id,
+        allowed_guild_ids=sorted(allowed),
+    )
+
+
+def _channel_for_admin_mutation(token: str, channel_id: str) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    channel = _discord_request("GET", f"/channels/{channel_id}", token)
+    if not isinstance(channel, dict):
+        return None, tool_error("Discord returned an invalid channel object; refusing mutation.")
+    guild_id = str(channel.get("guild_id") or "")
+    if not guild_id:
+        return None, tool_error("Discord admin mutations require a server channel, not a DM.")
+    scope_error = _require_admin_guild(guild_id)
+    if scope_error:
+        return None, scope_error
+    return channel, None
+
+
+def _request_destructive_approval(action: str, target: str, description: str) -> Optional[str]:
+    from tools.approval import request_tool_approval
+
+    decision = request_tool_approval(
+        "discord_admin",
+        description,
+        rule_key=f"discord_admin:{action}:{target}",
+    )
+    if decision.get("approved"):
+        return None
+    return tool_error(decision.get("message") or f"Discord action '{action}' was not approved.")
+
+
+def _create_channel(
+    token: str,
+    guild_id: str,
+    name: str,
+    channel_type: Any = "text",
+    parent_id: Optional[str] = None,
+    topic: Any = _UNSET,
+    position: Optional[int] = None,
+    nsfw: Optional[bool] = None,
+    **_kwargs: Any,
+) -> str:
+    """Create a Discord guild channel or category."""
+    scope_error = _require_admin_guild(guild_id)
+    if scope_error:
+        return scope_error
+    type_id = _channel_type_id(channel_type)
+    body: Dict[str, Any] = {"name": name, "type": type_id}
+    if parent_id is not _UNSET and parent_id:
+        body["parent_id"] = parent_id
+    if topic is not _UNSET and type_id in {0, 5, 15, 16}:
+        body["topic"] = topic
+    if position is not None:
+        body["position"] = int(position)
+    if nsfw is not None and type_id in {0, 5, 15, 16}:
+        body["nsfw"] = bool(nsfw)
+    channel = _discord_request("POST", f"/guilds/{guild_id}/channels", token, body=body)
+    return json.dumps({"success": True, "channel": _channel_summary(channel)})
+
+
+def _create_category(token: str, guild_id: str, name: str, position: Optional[int] = None, **_kwargs: Any) -> str:
+    return _create_channel(
+        token=token,
+        guild_id=guild_id,
+        name=name,
+        channel_type="category",
+        position=position,
+    )
+
+
+def _update_channel(
+    token: str,
+    channel_id: str,
+    name: str = "",
+    parent_id: Any = _UNSET,
+    topic: Any = _UNSET,
+    position: Optional[int] = None,
+    nsfw: Optional[bool] = None,
+    **_kwargs: Any,
+) -> str:
+    """Update editable Discord channel metadata."""
+    _channel, scope_error = _channel_for_admin_mutation(token, channel_id)
+    if scope_error:
+        return scope_error
+    body: Dict[str, Any] = {}
+    if name:
+        body["name"] = name
+    if parent_id is not _UNSET:
+        body["parent_id"] = parent_id or None
+    if topic is not _UNSET:
+        body["topic"] = topic
+    if position is not None:
+        body["position"] = int(position)
+    if nsfw is not None:
+        body["nsfw"] = bool(nsfw)
+    if not body:
+        return tool_error(
+            "Missing update parameters for 'update_channel': name, parent_id, "
+            "topic, position, or nsfw."
+        )
+    channel = _discord_request("PATCH", f"/channels/{channel_id}", token, body=body)
+    return json.dumps({"success": True, "channel": _channel_summary(channel)})
+
+
+def _delete_channel(token: str, channel_id: str, **_kwargs: Any) -> str:
+    """Permanently delete a Discord channel after human approval."""
+    channel, scope_error = _channel_for_admin_mutation(token, channel_id)
+    if scope_error:
+        return scope_error
+    approval_error = _request_destructive_approval(
+        "delete_channel",
+        channel_id,
+        f"Permanently delete Discord channel #{channel.get('name') or channel_id} ({channel_id}).",
+    )
+    if approval_error:
+        return approval_error
+    deleted = _discord_request("DELETE", f"/channels/{channel_id}", token)
+    return json.dumps({"success": True, "deleted_channel": _channel_summary(deleted or channel)})
+
+
+def _normalize_permission_bits(value: Any, field: str) -> str:
+    text = str(value if value not in (None, "") else 0)
+    if not text.isdigit() or int(text) < 0 or int(text) > (1 << 64) - 1:
+        raise ValueError(f"{field} must be an unsigned Discord permission bitfield.")
+    return str(int(text))
+
+
+def _set_channel_permission(
+    token: str,
+    channel_id: str,
+    overwrite_id: str,
+    target_type: str,
+    allow: Any = 0,
+    deny: Any = 0,
+    **_kwargs: Any,
+) -> str:
+    """Set a role or member permission overwrite on a scoped channel."""
+    channel, scope_error = _channel_for_admin_mutation(token, channel_id)
+    if scope_error:
+        return scope_error
+    type_map = {"role": 0, "member": 1}
+    if target_type not in type_map:
+        return tool_error("target_type must be 'role' or 'member'.")
+    body = {
+        "allow": _normalize_permission_bits(allow, "allow"),
+        "deny": _normalize_permission_bits(deny, "deny"),
+        "type": type_map[target_type],
+    }
+    _discord_request(
+        "PUT",
+        f"/channels/{channel_id}/permissions/{overwrite_id}",
+        token,
+        body=body,
+    )
+    return json.dumps({
+        "success": True,
+        "guild_id": channel.get("guild_id"),
+        "channel_id": channel_id,
+        "overwrite_id": overwrite_id,
+        "target_type": target_type,
+        **body,
+    })
+
+
+def _delete_channel_permission(
+    token: str,
+    channel_id: str,
+    overwrite_id: str,
+    **_kwargs: Any,
+) -> str:
+    """Delete a permission overwrite after human approval."""
+    channel, scope_error = _channel_for_admin_mutation(token, channel_id)
+    if scope_error:
+        return scope_error
+    approval_error = _request_destructive_approval(
+        "delete_channel_permission",
+        f"{channel_id}:{overwrite_id}",
+        "Delete Discord permission overwrite "
+        f"{overwrite_id} from #{channel.get('name') or channel_id} ({channel_id}).",
+    )
+    if approval_error:
+        return approval_error
+    _discord_request("DELETE", f"/channels/{channel_id}/permissions/{overwrite_id}", token)
+    return json.dumps({
+        "success": True,
+        "guild_id": channel.get("guild_id"),
+        "channel_id": channel_id,
+        "deleted_overwrite_id": overwrite_id,
+    })
+
+
 def _list_roles(token: str, guild_id: str, **_kwargs: Any) -> str:
     """List all roles in a guild."""
     roles = _discord_request("GET", f"/guilds/{guild_id}/roles", token)
@@ -634,6 +906,12 @@ _ACTIONS = {
     "server_info": _server_info,
     "list_channels": _list_channels,
     "channel_info": _channel_info,
+    "create_category": _create_category,
+    "create_channel": _create_channel,
+    "update_channel": _update_channel,
+    "delete_channel": _delete_channel,
+    "set_channel_permission": _set_channel_permission,
+    "delete_channel_permission": _delete_channel_permission,
     "list_roles": _list_roles,
     "member_info": _member_info,
     "search_members": _search_members,
@@ -661,6 +939,12 @@ _ACTION_MANIFEST: List[Tuple[str, str, str]] = [
     ("server_info", "(guild_id)", "server details + member counts"),
     ("list_channels", "(guild_id)", "all channels grouped by category"),
     ("channel_info", "(channel_id)", "single channel details"),
+    ("create_category", "(guild_id, name)", "create a server category"),
+    ("create_channel", "(guild_id, name, channel_type='text')", "create a text, voice, category, announcement, forum, or media channel"),
+    ("update_channel", "(channel_id)", "rename, recategorize, retopic, reposition, or change NSFW state"),
+    ("delete_channel", "(channel_id)", "permanently delete a channel after human approval"),
+    ("set_channel_permission", "(channel_id, overwrite_id, target_type, allow='0', deny='0')", "set a role/member channel permission overwrite"),
+    ("delete_channel_permission", "(channel_id, overwrite_id)", "delete a channel permission overwrite after human approval"),
     ("list_roles", "(guild_id)", "roles sorted by position"),
     ("member_info", "(guild_id, user_id)", "lookup a specific member"),
     ("search_members", "(guild_id, query)", "find members by name prefix"),
@@ -685,6 +969,12 @@ _REQUIRED_PARAMS: Dict[str, List[str]] = {
     "member_info": ["guild_id", "user_id"],
     "search_members": ["guild_id", "query"],
     "channel_info": ["channel_id"],
+    "create_category": ["guild_id", "name"],
+    "create_channel": ["guild_id", "name"],
+    "update_channel": ["channel_id"],
+    "delete_channel": ["channel_id"],
+    "set_channel_permission": ["channel_id", "overwrite_id", "target_type"],
+    "delete_channel_permission": ["channel_id", "overwrite_id"],
     "fetch_messages": ["channel_id"],
     "list_pins": ["channel_id"],
     "pin_message": ["channel_id", "message_id"],
@@ -751,6 +1041,8 @@ def _available_actions(
     """
     actions: List[str] = []
     for name in _ACTIONS:
+        if allowlist is None and name in _EXPLICIT_OPT_IN_ACTIONS:
+            continue
         # Intent filter
         if not caps.get("has_members_intent", True) and name in _INTENT_GATED_MEMBERS:
             continue
@@ -850,7 +1142,49 @@ def _build_schema(
         },
         "name": {
             "type": "string",
-            "description": "New thread name (create_thread).",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "New thread, channel, or category name.",
+        },
+        "channel_type": {
+            "type": "string",
+            "enum": ["text", "voice", "category", "announcement", "forum", "media"],
+            "description": "Discord channel type for create_channel (default: text).",
+        },
+        "parent_id": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "description": "Parent category ID. Pass null to remove a channel from its category.",
+        },
+        "topic": {
+            "anyOf": [{"type": "string", "maxLength": 1024}, {"type": "null"}],
+            "description": "Channel topic. Pass null to clear it.",
+        },
+        "position": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Channel/category sorting position.",
+        },
+        "nsfw": {
+            "type": "boolean",
+            "description": "Whether the channel is marked NSFW.",
+        },
+        "overwrite_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "description": "Role or member ID whose channel overwrite is changed.",
+        },
+        "target_type": {
+            "type": "string",
+            "enum": ["role", "member"],
+            "description": "Permission overwrite target type.",
+        },
+        "allow": {
+            "anyOf": [{"type": "integer", "minimum": 0}, {"type": "string", "pattern": "^[0-9]{1,20}$"}],
+            "description": "Discord permission bitfield to allow.",
+        },
+        "deny": {
+            "anyOf": [{"type": "integer", "minimum": 0}, {"type": "string", "pattern": "^[0-9]{1,20}$"}],
+            "description": "Discord permission bitfield to deny.",
         },
         "limit": {
             "type": "integer",
@@ -929,6 +1263,24 @@ _ACTION_403_HINT = {
     "delete_message": (
         "Bot lacks MANAGE_MESSAGES permission in this channel, or cannot view the channel/message."
     ),
+    "create_category": (
+        "Bot lacks MANAGE_CHANNELS permission in this server."
+    ),
+    "create_channel": (
+        "Bot lacks MANAGE_CHANNELS permission in this server or target category."
+    ),
+    "update_channel": (
+        "Bot lacks MANAGE_CHANNELS permission for this channel."
+    ),
+    "delete_channel": (
+        "Bot lacks MANAGE_CHANNELS permission for this channel."
+    ),
+    "set_channel_permission": (
+        "Bot lacks MANAGE_ROLES permission or cannot edit overwrites for this channel."
+    ),
+    "delete_channel_permission": (
+        "Bot lacks MANAGE_ROLES permission or cannot edit overwrites for this channel."
+    ),
     "create_thread": (
         "Bot lacks CREATE_PUBLIC_THREADS in this channel, or cannot view it."
     ),
@@ -994,6 +1346,15 @@ def _run_discord_action(
     message_id: str = "",
     query: str = "",
     name: str = "",
+    channel_type: Any = "text",
+    parent_id: Any = _UNSET,
+    topic: Any = _UNSET,
+    position: Optional[int] = None,
+    nsfw: Optional[bool] = None,
+    overwrite_id: str = "",
+    target_type: str = "",
+    allow: Any = 0,
+    deny: Any = 0,
     limit: int = 50,
     before: str = "",
     after: str = "",
@@ -1015,6 +1376,13 @@ def _run_discord_action(
     # but a stale cached schema from a prior config should not let denied
     # actions through).
     allowlist = _load_allowed_actions_config()
+    if action in _EXPLICIT_OPT_IN_ACTIONS and (
+        allowlist is None or action not in allowlist
+    ):
+        return tool_error(
+            f"Action '{action}' is destructive and requires explicit opt-in "
+            "via discord.server_actions."
+        )
     if allowlist is not None and action not in allowlist:
         return tool_error(
             f"Action '{action}' is disabled by config (discord.server_actions). "
@@ -1029,6 +1397,8 @@ def _run_discord_action(
         "message_id": message_id,
         "query": query,
         "name": name,
+        "overwrite_id": overwrite_id,
+        "target_type": target_type,
     }
 
     missing = [p for p in _REQUIRED_PARAMS.get(action, []) if not local_vars.get(p)]
@@ -1047,6 +1417,15 @@ def _run_discord_action(
             message_id=message_id,
             query=query,
             name=name,
+            channel_type=channel_type,
+            parent_id=parent_id,
+            topic=topic,
+            position=position,
+            nsfw=nsfw,
+            overwrite_id=overwrite_id,
+            target_type=target_type,
+            allow=allow,
+            deny=deny,
             limit=limit,
             before=before,
             after=after,
@@ -1079,6 +1458,9 @@ def discord_admin_handler(action: str, **kwargs) -> str:
 _HANDLER_DEFAULTS = {
     "action": "", "guild_id": "", "channel_id": "", "user_id": "",
     "role_id": "", "message_id": "", "query": "", "name": "",
+    "channel_type": "text", "parent_id": _UNSET, "topic": _UNSET,
+    "position": None, "nsfw": None, "overwrite_id": "", "target_type": "",
+    "allow": 0, "deny": 0,
     "limit": 50, "before": "", "after": "", "auto_archive_duration": 1440,
 }
 
@@ -1094,7 +1476,9 @@ _STATIC_CORE_SCHEMA = _build_schema(
     list(_CORE_ACTIONS.keys()), caps={"detected": False}, tool_name="discord",
 )
 _STATIC_ADMIN_SCHEMA = _build_schema(
-    list(_ADMIN_ACTIONS.keys()), caps={"detected": False}, tool_name="discord_admin",
+    [action for action in _ADMIN_ACTIONS if action not in _EXPLICIT_OPT_IN_ACTIONS],
+    caps={"detected": False},
+    tool_name="discord_admin",
 )
 
 registry.register(

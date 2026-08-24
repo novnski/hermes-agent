@@ -562,7 +562,11 @@ class TestConfigAllowlist:
 class TestAvailableActions:
     def test_all_available_when_unrestricted(self):
         caps = {"detected": True, "has_members_intent": True, "has_message_content": True}
-        assert _available_actions(caps, None) == list(_ACTIONS.keys())
+        assert _available_actions(caps, None) == [
+            action for action in _ACTIONS if action not in {
+                "delete_channel", "delete_channel_permission",
+            }
+        ]
 
     def test_no_members_intent_hides_member_actions(self):
         caps = {"detected": True, "has_members_intent": False, "has_message_content": True}
