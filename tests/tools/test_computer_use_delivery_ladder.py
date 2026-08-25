@@ -223,7 +223,8 @@ def test_bad_delivery_mode_rejected():
 def test_dispatcher_threads_delivery_mode_to_backend():
     """End-to-end through the tool dispatcher with the noop backend."""
     from tools.computer_use import tool as cu
-    with patch.dict(os.environ, {"HERMES_COMPUTER_USE_BACKEND": "noop"}, clear=False):
+    with patch.dict(os.environ, {"HERMES_COMPUTER_USE_BACKEND": "noop"}, clear=False), \
+         patch.object(cu, "_foreground_policy", return_value="allow"):
         cu.reset_backend_for_tests()
         be = cu._get_backend()
         cu.handle_computer_use({"action": "click", "element": 5,
@@ -231,6 +232,75 @@ def test_dispatcher_threads_delivery_mode_to_backend():
         # noop records kwargs; find the click call
         clicks = [kw for (name, kw) in be.calls if name == "click"]  # type: ignore[attr-defined]
         assert clicks and clicks[-1].get("delivery_mode") == "foreground"
+
+
+def test_foreground_ask_fails_closed_during_approval_bypass(monkeypatch):
+    from tools.computer_use import tool as cu
+
+    monkeypatch.setattr(cu, "_foreground_policy", lambda: "ask")
+    monkeypatch.setattr(cu, "_approval_bypass_active", lambda _sid: True)
+    parsed = json.loads(cu.handle_computer_use(
+        {"action": "focus_app", "app": "Calculator", "raise_window": True},
+        session_id="run-yolo",
+    ))
+
+    assert parsed["code"] == "foreground_consent_required"
+
+
+def test_foreground_ask_uses_real_callback_once_without_caching(monkeypatch):
+    from tools.computer_use import tool as cu
+
+    calls = []
+    monkeypatch.setattr(cu, "_foreground_policy", lambda: "ask")
+    monkeypatch.setattr(cu, "_approval_bypass_active", lambda _sid: False)
+    cu.set_approval_callback(
+        lambda action, args, summary: calls.append((action, summary)) or "approve_session"
+    )
+    try:
+        assert cu._request_foreground_consent(
+            "click", {"delivery_mode": "foreground"}, "run-A"
+        ) is None
+        assert cu._request_foreground_consent(
+            "click", {"delivery_mode": "foreground"}, "run-A"
+        ) is None
+    finally:
+        cu.set_approval_callback(None)
+
+    assert [action for action, _summary in calls] == [
+        "foreground_control", "foreground_control",
+    ]
+
+
+def test_foreground_never_refuses_even_with_callback(monkeypatch):
+    from tools.computer_use import tool as cu
+
+    monkeypatch.setattr(cu, "_foreground_policy", lambda: "never")
+    cu.set_approval_callback(lambda *_args: "approve_once")
+    try:
+        result = cu._request_foreground_consent(
+            "key", {"delivery_mode": "foreground"}, "run-A"
+        )
+    finally:
+        cu.set_approval_callback(None)
+
+    assert json.loads(result)["code"] == "foreground_disabled"
+
+
+def test_background_action_does_not_enter_foreground_policy(monkeypatch):
+    from tools.computer_use import tool as cu
+
+    monkeypatch.setenv("HERMES_COMPUTER_USE_BACKEND", "noop")
+    cu.reset_backend_for_tests()
+    monkeypatch.setattr(
+        cu, "_request_foreground_consent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("background action entered foreground policy")
+        ),
+    )
+    parsed = json.loads(cu.handle_computer_use(
+        {"action": "click", "element": 1}, session_id="background-run"
+    ))
+    assert "error" not in parsed
 
 
 # ---------------------------------------------------------------------------

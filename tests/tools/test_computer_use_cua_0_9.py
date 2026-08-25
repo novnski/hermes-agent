@@ -366,7 +366,7 @@ def test_persistent_focus_has_a_separate_approval_scope():
 
     def approve(action, args, summary):
         seen.append(action)
-        return "approve_once" if action == "click" else "deny"
+        return "deny"
 
     computer_use.set_approval_callback(approve)
     try:
@@ -384,9 +384,9 @@ def test_persistent_focus_has_a_separate_approval_scope():
     finally:
         computer_use.set_approval_callback(None)
 
-    assert seen == ["click", "bring_to_front"]
-    assert result["error"] == "denied by user"
-    assert result["action"] == "bring_to_front"
+    assert seen == ["foreground_control"]
+    assert result["code"] == "foreground_denied"
+    assert result["action"] == "click"
 
 
 # ---------------------------------------------------------------------------

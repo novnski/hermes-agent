@@ -13,9 +13,19 @@ def test_max_image_dimension_default():
 
 
 
-def test_capture_after_mode_default_som():
+def test_capture_after_mode_default_ax():
     with patch("hermes_cli.config.load_config", return_value={}):
-        assert cu_tool._capture_after_mode() == "som"
+        assert cu_tool._capture_after_mode() == "ax"
+
+
+def test_foreground_policy_defaults_to_ask():
+    with patch("hermes_cli.config.load_config", return_value={}):
+        assert cu_tool._foreground_policy() == "ask"
+
+
+def test_approval_bypass_does_not_default_to_unrestricted_cua():
+    with patch("hermes_cli.config.load_config", return_value={}):
+        assert cua_backend._cua_unrestricted_on_approval_bypass() is False
 
 
 

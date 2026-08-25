@@ -64,6 +64,14 @@ class TestSchema:
         assert prop.get("default") == _DEFAULT_MAX_ELEMENTS
         assert prop.get("maximum") == _MAX_ALLOWED_MAX_ELEMENTS
 
+    def test_schema_teaches_ax_first_background_workflow(self):
+        from tools.computer_use.schema import COMPUTER_USE_SCHEMA
+
+        description = COMPUTER_USE_SCHEMA["description"]
+        mode = COMPUTER_USE_SCHEMA["parameters"]["properties"]["mode"]
+        assert "mode='ax'" in description
+        assert "`ax` (default)" in mode["description"]
+
 
 class TestRegistration:
     def test_tool_registers_with_registry(self):
@@ -232,6 +240,25 @@ class TestCaptureResponse:
         # AX mode → always JSON string
         parsed = json.loads(out)
         assert parsed["mode"] == "ax"
+
+    def test_capture_ax_preserves_static_text_and_values(self):
+        from tools.computer_use.backend import CaptureResult
+        from tools.computer_use import tool as cu_tool
+
+        class AxTextBackend:
+            def capture(self, **_kwargs):
+                return CaptureResult(
+                    mode="ax", width=0, height=0, app="Calculator",
+                    ax_tree='- AXStaticText = "51+9"\n- AXStaticText = "60"',
+                )
+
+        with patch.object(cu_tool, "_get_backend", return_value=AxTextBackend()):
+            parsed = json.loads(cu_tool.handle_computer_use({
+                "action": "capture", "mode": "ax", "app": "Calculator",
+            }))
+
+        assert 'AXStaticText = "51+9"' in parsed["ax_tree"]
+        assert 'AXStaticText = "60"' in parsed["ax_tree"]
 
     def test_capture_vision_mode_with_image_returns_multimodal_envelope(self):
         """Inject a fake backend that returns a PNG to exercise the envelope path."""
@@ -1520,6 +1547,8 @@ class TestCaptureAppFilterNoMatch:
         assert backend._active_window_id is None
 
     def test_linux_default_capture_skips_gnome_shell_helper(self):
+        from tools.computer_use import cua_backend as cb
+
         windows = [
             {"app_name": "", "pid": 100, "window_id": 1,
              "is_on_screen": None, "title": "@!1921,0;BDHF", "z_index": 0},
@@ -1535,7 +1564,8 @@ class TestCaptureAppFilterNoMatch:
              "structuredContent": None},
         ]
 
-        backend.capture(mode="ax")
+        with patch.object(cb.sys, "platform", "linux"):
+            backend.capture(mode="ax")
 
         assert backend._active_pid == 200
         assert backend._active_window_id == 2
@@ -1628,7 +1658,7 @@ class TestCaptureAfterExactTarget:
         _maybe_follow_capture(cast(Any, backend), ActionResult(ok=True, action="click"), True)
 
         assert backend.capture_calls == [{
-            "mode": "som", "app": None, "pid": 7675, "window_id": 42,
+            "mode": "ax", "app": None, "pid": 7675, "window_id": 42,
         }]
 
 class TestCuaEnvironmentScrubbing:
@@ -2174,8 +2204,8 @@ class TestElementTokenAttachment:
     1. capture() refreshes a per-snapshot {index -> token} map from
        structuredContent.elements.
     2. Whenever an action carrying element_index is about to hit cua-driver,
-       look up the matching token and attach it — but ONLY for tools that
-       advertise `accessibility.element_tokens` (Surface 4 gate). Older
+       look up the matching token and attach it for tools that advertise the
+       capability OR expose `element_token` in their live input schema. Older
        drivers reject unknown args via additionalProperties=false.
     3. cua-driver prefers token over index when both are supplied, so
        sending both is safe and stale-detection becomes explicit.
@@ -2198,6 +2228,7 @@ class TestElementTokenAttachment:
                 return cap in capabilities.get(tool, set())
             return any(cap in caps for caps in capabilities.values())
         backend._session.supports_capability = _supports
+        backend._session.supports_input_property = lambda _tool, _prop: False
         backend._active_pid = 111
         backend._active_window_id = 222
         return backend
@@ -2213,6 +2244,18 @@ class TestElementTokenAttachment:
         assert args["element_index"] == 5
         # The matching token rode along — cua-driver will prefer it.
         assert args["element_token"] == "s0001:5"
+
+    def test_token_attached_when_live_schema_accepts_it_without_capability(self):
+        backend = self._backend_with_session({"click": {"input.pointer.click"}})
+        backend._session.supports_input_property = (
+            lambda tool, prop: tool == "click" and prop == "element_token"
+        )
+        backend._snapshot_tokens = {5: "s0002:5"}
+
+        backend.click(element=5, button="left")
+
+        _name, args = backend._session.call_tool.call_args.args
+        assert args["element_token"] == "s0002:5"
 
 
     def test_capture_refreshes_snapshot_tokens(self):

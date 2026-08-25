@@ -34,14 +34,15 @@ planned cua-driver follow-up, so currently point Hermes at the resulting
 
 ## The canonical workflow
 
-**Step 1 — Capture first.** Almost every task starts with:
+**Step 1 — Read the AX tree first.** Almost every task starts with:
 
 ```
-computer_use(action="capture", mode="som", app="<the app you're driving>")
+computer_use(action="capture", mode="ax", app="<the app you're driving>")
 ```
 
-Returns a screenshot with numbered overlays on every interactable
-element AND an AX-tree index like:
+Returns the target window's AX-tree index without taking or transmitting a
+screenshot. It is cheaper, more precise for labelled controls, and does not
+need the app to be frontmost:
 
 ```
 #1  AXButton 'Back' @ (12, 80, 28, 28) [Chrome]
@@ -64,8 +65,9 @@ computer_use(action="click", element=7)
 Much more reliable than pixel coordinates for every model. Claude was
 trained on both; other models are often only reliable with indices.
 
-**Step 3 — Verify.** After any state-changing action, re-capture. You
-can save a round-trip by asking for the post-action capture inline:
+**Step 3 — Verify with fresh AX state.** After any state-changing action,
+re-capture with `mode="ax"`. You can save a round-trip by asking for the
+post-action AX capture inline (the configured default):
 
 ```
 computer_use(action="click", element=7, capture_after=True)
@@ -75,9 +77,9 @@ computer_use(action="click", element=7, capture_after=True)
 
 | `mode` | Returns | Best for |
 |---|---|---|
-| `som` (default) | Screenshot + numbered overlays + AX index | Vision models; preferred default |
+| `ax` (default) | AX tree only, no image | Preferred for labelled controls and verification |
+| `som` | Screenshot + numbered overlays + AX index | When AX alone cannot describe visual state |
 | `vision` | Plain screenshot | When SOM overlay interferes with what you want to verify |
-| `ax` | AX tree only, no image | Text-only models, or when you don't need to see pixels |
 
 ## Actions
 
@@ -153,6 +155,13 @@ Walk it in order:
    terminal/file tools and let the editor reload it, or drive the app's
    DBus/CLI interface. Never loop the ladder against a surface that
    verifiably swallows synthetic input.
+
+Foreground is additionally governed by `computer_use.foreground_policy`.
+`ask` requires real per-action consent and fails closed when the current
+surface cannot present it; global YOLO/approval bypass is never consent.
+`never` disables the rung, while `allow` is an explicit persistent opt-in.
+If foreground is refused, keep working through AX, background pixels, typed
+browser tools, or the app's own API/CLI instead of trying to raise it again.
 
 ```
 computer_use(action="click", element=7)
@@ -331,6 +340,7 @@ in your conversation context.
 | `cua-driver not installed` | Run `hermes computer-use install`, or `hermes tools` and enable Computer Use |
 | Captures consistently return empty / "no on-screen window" | On Linux: DISPLAY may not be set (X11) or you're on pure Wayland — ask the user to run `hermes computer-use doctor`. On Windows: you may be in Session 0 (SSH session) instead of the interactive desktop — see the cua-driver `WINDOWS.md` deep-dive |
 | Element index stale ("Element N not in cache") | SOM indices are only valid until the next `capture`. Re-capture before clicking. The wrapper carries opaque `element_token`s for stale-detection; you'll see an explicit error rather than a wrong click |
+| `bare element_index is not accepted` for an element present only in the saved full tree | Re-capture with `mode="ax"` and a high enough `max_elements` so the target is returned directly. If the wrapper still refuses the index, use a coordinate from the visible screenshot. On macOS, coordinate actions may consume screenshot-local pixels even when the capture summary prints native desktop bounds; derive the point from the screenshot/window-local geometry and verify with a fresh capture. |
 | Click had no effect | Read the structured verdict. `effect:"unverifiable"` → fresh capture/state before retry, even with an escalation hint. `effect:"suspected_noop"` or a structured refusal → climb the recommended ladder: coordinate (px), typed page route when exact, then foreground. Browser chrome/native prompts remain native. Don't conclude the app is undrivable |
 | Type text disappears into a terminal emulator | cua-driver detects terminals (Ghostty, iTerm2, Terminal.app, Windows Terminal, mintty, etc.) and routes through key-event synthesis — should "just work" on a recent cua-driver. If it doesn't, ask the user to run `hermes computer-use doctor` |
 | `blocked pattern in type text` | You tried to `type` a shell command matching the dangerous-pattern block list (`curl ... \| bash`, `sudo rm -rf`, etc.). Break the command up or reconsider |

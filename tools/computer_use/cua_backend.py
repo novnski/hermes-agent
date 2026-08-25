@@ -276,6 +276,16 @@ def _cua_configured_permission_mode() -> str:
     return raw if raw in {"standard", "bounded"} else "standard"
 
 
+def _cua_unrestricted_on_approval_bypass() -> bool:
+    """Whether Hermes YOLO/off may widen CUA to unrestricted mode.
+
+    This is a separate opt-in because skipping ordinary Hermes prompts is not
+    consent to discard cua-driver's own residual boundary or to switch from
+    the signed app daemon to a private embedded runtime.
+    """
+    return bool(_computer_use_cfg().get("unrestricted_on_approval_bypass", False))
+
+
 def _cua_capability_manifest() -> Optional[str]:
     """Path of the reviewed capability manifest for bounded mode, or None.
 
@@ -3064,6 +3074,7 @@ class CuaDriverBackend(ComputerUseBackend):
         png_b64: Optional[str] = None
         image_mime_type: Optional[str] = None
         elements: List[UIElement] = []
+        tree = ""
         width = height = 0
         window_title = ""
 
@@ -3264,6 +3275,7 @@ class CuaDriverBackend(ComputerUseBackend):
             window_title=window_title,
             png_bytes_len=png_bytes_len,
             image_mime_type=image_mime_type,
+            ax_tree=tree if mode != "vision" else "",
         )
 
     # ── Pointer ────────────────────────────────────────────────────
@@ -3961,9 +3973,11 @@ class CuaDriverBackend(ComputerUseBackend):
            supplied. Returns an explicit 'stale' error if the snapshot
            has been superseded."
 
-        Gated on the per-tool capability claim so we don't send the
-        field to drivers that predate the surface (which would reject
-        the schema with `additionalProperties: false`).
+        Gated on either the per-tool capability claim or the live input
+        schema. cua-driver 0.22 exposes `element_token` in inputSchema but no
+        longer repeats Hermes's older `accessibility.element_tokens` token;
+        the schema is authoritative for whether additionalProperties=false
+        will accept the field.
         """
         idx = args.get("element_index")
         if not isinstance(idx, int):
@@ -3971,9 +3985,10 @@ class CuaDriverBackend(ComputerUseBackend):
         token = self._snapshot_tokens.get(idx)
         if not token:
             return
-        if not self._session.supports_capability(
+        supports_token = self._session.supports_capability(
             "accessibility.element_tokens", tool=tool
-        ):
+        ) or self._session.supports_input_property(tool, "element_token")
+        if not supports_token:
             return
         args["element_token"] = token
 

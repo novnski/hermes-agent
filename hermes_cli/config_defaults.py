@@ -3578,9 +3578,11 @@ DEFAULT_CONFIG = {
         # Cap driver screenshot longest edge (pixels) via set_config on
         # session start. Shrinks SOM multimodal payloads; 0 disables.
         "max_image_dimension": 1456,
-        # Mode for capture_after follow-ups: som (screenshot + overlays —
-        # default), ax (elements only, no PNG — faster), vision (pixels only).
-        "capture_after_mode": "som",
+        # Mode for capture_after follow-ups: ax (default: elements only, no
+        # PNG — fast and background-safe), som (screenshot + overlays), or
+        # vision (pixels only). Agents should request pixels only when AX is
+        # insufficient for the surface they need to inspect.
+        "capture_after_mode": "ax",
         # Disable the cursor overlay rendered by cua-driver. The overlay
         # shows where agent actions land but can peg a core when idle
         # (macOS vImage redraw loop #47032; Linux/WSL2 idle spin #28152).
@@ -3590,6 +3592,20 @@ DEFAULT_CONFIG = {
         #   True  = always disable the overlay
         #   False = always enable the overlay
         "no_overlay": None,
+        # Foreground input policy. This is independent of the global approval
+        # bypass so `approvals.mode: off` cannot silently authorize focus
+        # stealing:
+        #   ask   = require a real per-action computer-use approval callback;
+        #           fail closed on non-interactive/gateway surfaces
+        #   never = reject foreground delivery entirely
+        #   allow = permit the normal foreground ladder without a dedicated
+        #           computer-use confirmation (explicit persistent opt-in)
+        "foreground_policy": "ask",
+        # Preserve cua-driver's standard/bounded permission boundary even
+        # when unrelated Hermes approvals are bypassed. Set true only to
+        # restore the legacy behavior where YOLO/off launches a private
+        # unrestricted embedded daemon.
+        "unrestricted_on_approval_bypass": False,
         # cua-driver permission mode for each Hermes computer-use runtime.
         #   standard (default) — cua-driver's own approval boundary. Protected
         #     operations (e.g. attaching to an existing signed-in browser

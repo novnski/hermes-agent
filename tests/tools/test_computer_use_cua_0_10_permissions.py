@@ -27,17 +27,17 @@ def test_normal_hermes_session_maps_to_standard_mode():
         assert computer_use._cua_permission_mode("session-a") == "standard"
 
 
-def test_any_explicit_hermes_bypass_maps_to_unrestricted_mode():
+def test_explicit_hermes_bypass_keeps_standard_without_cua_opt_in():
     from tools.computer_use import tool as computer_use
 
     with patch(
         "tools.approval.is_approval_bypass_active_for_session",
         return_value=True,
     ):
-        assert computer_use._cua_permission_mode("session-a") == "unrestricted"
+        assert computer_use._cua_permission_mode("session-a") == "standard"
 
 
-def test_gateway_session_key_yolo_maps_to_unrestricted_mode():
+def test_gateway_session_key_yolo_keeps_standard_without_cua_opt_in():
     """Gateway /yolo keys bypass off the gateway session_key contextvar,
     not the DB session_id the tool path passes. Mode resolution must consult
     both namespaces or /yolo is silently dead on messaging platforms."""
@@ -49,7 +49,7 @@ def test_gateway_session_key_yolo_maps_to_unrestricted_mode():
     try:
         approval.enable_session_yolo(gateway_key)
         # Tool dispatch passes the (different) DB session id.
-        assert computer_use._cua_permission_mode("db-sid-xyz") == "unrestricted"
+        assert computer_use._cua_permission_mode("db-sid-xyz") == "standard"
         approval.disable_session_yolo(gateway_key)
         assert computer_use._cua_permission_mode("db-sid-xyz") == "standard"
     finally:
@@ -81,6 +81,9 @@ def test_mode_change_replaces_only_that_sessions_backend():
     with patch(
         "tools.approval.is_approval_bypass_active_for_session",
         side_effect=lambda sid: yolo,
+    ), patch(
+        "tools.computer_use.cua_backend._cua_unrestricted_on_approval_bypass",
+        return_value=True,
     ), patch(
         "tools.computer_use.cua_backend.CuaDriverBackend", _Backend
     ):
@@ -118,6 +121,9 @@ def test_mode_change_is_rechecked_after_stale_backend_stops():
     with patch(
         "tools.approval.is_approval_bypass_active_for_session",
         side_effect=lambda sid: yolo,
+    ), patch(
+        "tools.computer_use.cua_backend._cua_unrestricted_on_approval_bypass",
+        return_value=True,
     ), patch("tools.computer_use.cua_backend.CuaDriverBackend", _Backend):
         original = computer_use._get_backend("session-a")
         yolo = True
@@ -277,6 +283,9 @@ def test_bypass_escalation_is_warned_once_per_session(caplog):
     with patch(
         "tools.approval.is_approval_bypass_active_for_session",
         return_value=True,
+    ), patch(
+        "tools.computer_use.cua_backend._cua_unrestricted_on_approval_bypass",
+        return_value=True,
     ):
         with caplog.at_level(logging.WARNING, logger=computer_use.logger.name):
             assert computer_use._cua_permission_mode("session-warn") == "unrestricted"
@@ -317,6 +326,9 @@ def test_each_session_is_warned_separately(caplog):
     computer_use._escalation_warned.clear()
     with patch(
         "tools.approval.is_approval_bypass_active_for_session",
+        return_value=True,
+    ), patch(
+        "tools.computer_use.cua_backend._cua_unrestricted_on_approval_bypass",
         return_value=True,
     ):
         with caplog.at_level(logging.WARNING, logger=computer_use.logger.name):

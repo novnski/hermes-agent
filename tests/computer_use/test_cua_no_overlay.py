@@ -28,6 +28,11 @@ class TestNoOverlayFlag:
                    return_value={"computer_use": {"no_overlay": True}}):
             assert cua_backend._cua_no_overlay() is True
 
+    def test_explicit_false_restores_cursor_overlay(self):
+        with patch("hermes_cli.config.load_config",
+                   return_value={"computer_use": {"no_overlay": False}}):
+            assert cua_backend._cua_no_overlay() is False
+
 
     @pytest.mark.macos_only
     def test_config_load_failure_falls_through_to_auto_detect_macos(self):

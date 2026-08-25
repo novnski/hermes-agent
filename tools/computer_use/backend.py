@@ -43,7 +43,7 @@ class CaptureResult:
 
     At least one of png_b64 / elements is populated depending on capture mode:
       * mode="vision" → png_b64 only
-      * mode="ax"     → elements only
+      * mode="ax"     → elements + ax_tree, no screenshot
       * mode="som"    → both (default): PNG already has numbered overlays
                          drawn by the backend, and `elements` holds the
                          matching index → element mapping.
@@ -54,6 +54,11 @@ class CaptureResult:
     height: int
     png_b64: Optional[str] = None
     elements: List[UIElement] = field(default_factory=list)
+    # Complete bounded AX tree text from cua-driver. Unlike `elements`, this
+    # preserves non-actionable static text and values (status labels,
+    # document content, calculator results) so AX-first agents can actually
+    # read an app without requesting pixels.
+    ax_tree: str = ""
     # Optional: the target app/window the elements were captured for.
     app: str = ""
     window_title: str = ""

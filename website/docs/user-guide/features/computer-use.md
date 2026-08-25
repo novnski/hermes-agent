@@ -96,6 +96,32 @@ hermes -t computer_use chat
 
 or add `computer_use` to your enabled toolsets in `~/.hermes/config.yaml`.
 
+## Background-first policy
+
+Hermes reads accessibility state before requesting pixels. The normal loop is
+`capture(mode="ax")` → element-token action → fresh AX verification. Request a
+window-only `som` or `vision` capture when the AX tree cannot express visual
+state such as a canvas, image editor, game surface, or custom-drawn control.
+macOS can capture a background window without making it frontmost.
+
+Foreground delivery is a separate policy boundary:
+
+```yaml
+computer_use:
+  foreground_policy: ask   # ask | never | allow
+  capture_after_mode: ax
+```
+
+`ask` is the default. It requires a real per-action computer-use approval and
+fails closed on non-interactive surfaces. `approvals.mode: off`, `/yolo`, and
+one-shot `-z` do not count as foreground consent. `never` removes the rung;
+`allow` is an explicit persistent opt-in. Background input remains available
+under every policy.
+
+Approval bypass also leaves cua-driver in its configured standard/bounded mode
+by default. Set `computer_use.unrestricted_on_approval_bypass: true` only to
+restore the legacy private unrestricted daemon behavior.
+
 ## Permission modes and logged-in browser profiles
 
 Hermes maps its existing approval UX onto cua-driver's immutable runtime
@@ -106,7 +132,8 @@ grant are launch settings. They cannot change after the runtime starts:
 |---|---|---|---|
 | Manual or smart approvals (default) | `standard` | Normal Hermes approvals; Cua stops at its protected boundary | Refuses unless `computer_use.grant_existing_profile: true` (one-time config opt-in) |
 | `computer_use.permission_mode: bounded` + reviewed manifest | private `bounded` daemon | You review and approve the capability manifest once, at launch | Allowed only within the manifest's declared profiles/origins/tools; everything else fails closed |
-| `--yolo`, `/yolo`, or `approvals.mode: off` | private `unrestricted` daemon | One explicit Hermes risk acceptance; no runtime Cua prompts | Refuses unless `computer_use.grant_existing_profile: true`; YOLO does not substitute for this grant |
+| `--yolo`, `/yolo`, or `approvals.mode: off` | configured `standard` / `bounded` mode by default | Ordinary prompts are skipped, but foreground still follows `foreground_policy` | Refuses unless `computer_use.grant_existing_profile: true`; approval bypass does not substitute for this grant |
+| Approval bypass + `computer_use.unrestricted_on_approval_bypass: true` | private `unrestricted` daemon | Explicit legacy opt-in; no runtime Cua prompts | Still refuses unless `computer_use.grant_existing_profile: true` |
 
 ### Attaching to your signed-in browser
 
@@ -272,13 +299,12 @@ User prompt: *"Find my latest email from Stripe and summarise what they want me 
 The agent's plan (this is the same shape on macOS / Windows / Linux —
 the model substitutes the platform's idiomatic shortcut and app name):
 
-1. `computer_use(action="capture", mode="som", app="Mail")` — gets a
-   screenshot of the email app with every sidebar item, toolbar button,
-   and message row numbered.
+1. `computer_use(action="capture", mode="ax", app="Mail")` — reads the
+   email app's labelled controls and values without taking a screenshot.
 2. `computer_use(action="click", element=14)` — clicks the search field.
 3. `computer_use(action="type", text="from:stripe")`
 4. `computer_use(action="key", keys="return", capture_after=True)` —
-   submit and get the new screenshot.
+   submit and get fresh AX verification.
 5. Click the top result, read the body, summarise.
 
 During all of this, your cursor stays wherever you left it and the email

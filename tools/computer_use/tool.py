@@ -237,8 +237,27 @@ def _warn_bypass_escalation(session_id: str) -> None:
     )
 
 
+def _approval_bypass_active(session_id: str) -> bool:
+    """Resolve approval bypass across DB-session and gateway-key namespaces."""
+    try:
+        from tools.approval import (
+            get_current_session_key,
+            is_approval_bypass_active_for_session,
+        )
+
+        if is_approval_bypass_active_for_session(session_id):
+            return True
+        current_key = get_current_session_key(default="")
+        return bool(
+            current_key
+            and is_approval_bypass_active_for_session(current_key)
+        )
+    except Exception:
+        return False
+
+
 def _cua_permission_mode(session_id: str) -> str:
-    """Map Hermes's explicit approval bypass onto Cua's immutable mode.
+    """Resolve Cua's immutable mode without conflating it with approvals.
 
     Hermes has TWO session-identity namespaces: the tool-dispatch path passes
     the DB ``session_id`` (``agent.session_id``), while gateway ``/yolo``
@@ -247,34 +266,117 @@ def _cua_permission_mode(session_id: str) -> str:
     use the DB id for both. Checking ONLY ``session_id`` here would make a
     gateway ``/yolo`` toggle silently invisible to computer_use (works in
     CLI, dead on messaging platforms), so we consult both namespaces —
-    bypass in either means the user explicitly opted out of approvals for
-    this run. Fails closed on any resolution error.
+    bypass in either means the user opted out of ordinary Hermes prompts, but
+    it widens CUA to unrestricted only when the separate
+    ``computer_use.unrestricted_on_approval_bypass`` opt-in is enabled.
+    Otherwise configured standard/bounded mode remains intact. Fails closed
+    on any resolution error.
     """
-    try:
-        from tools.approval import (
-            get_current_session_key,
-            is_approval_bypass_active_for_session,
-        )
+    if _approval_bypass_active(session_id):
+        try:
+            from tools.computer_use.cua_backend import (
+                _cua_unrestricted_on_approval_bypass,
+            )
 
-        if is_approval_bypass_active_for_session(session_id):
-            _warn_bypass_escalation(session_id)
-            return "unrestricted"
-        current_key = get_current_session_key(default="")
-        if current_key and is_approval_bypass_active_for_session(current_key):
-            _warn_bypass_escalation(session_id)
-            return "unrestricted"
-    except Exception:
-        # Approval state must fail closed if it cannot be resolved.
-        pass
+            if _cua_unrestricted_on_approval_bypass():
+                _warn_bypass_escalation(session_id)
+                return "unrestricted"
+        except Exception:
+            # A policy resolution error fails closed to configured mode.
+            pass
     try:
-        # Without YOLO, honor the configured mode (standard | bounded).
-        # bounded requires computer_use.capability_manifest; the backend
-        # fails loudly at session start when the manifest is missing.
+        # Without the dedicated unrestricted opt-in, honor the configured
+        # standard/bounded CUA boundary even when other approvals are off.
         from tools.computer_use.cua_backend import _cua_configured_permission_mode
 
         return _cua_configured_permission_mode()
     except Exception:
         return "standard"
+
+
+def _foreground_policy() -> str:
+    """Return the dedicated foreground policy: ask, never, or allow."""
+    try:
+        from tools.computer_use.cua_backend import _computer_use_cfg
+
+        raw = str(_computer_use_cfg().get("foreground_policy", "ask") or "")
+        policy = raw.strip().lower()
+        return policy if policy in {"ask", "never", "allow"} else "ask"
+    except Exception:
+        return "ask"
+
+
+def _is_foreground_request(action: str, args: Dict[str, Any]) -> bool:
+    return bool(
+        args.get("delivery_mode") == "foreground"
+        or args.get("bring_to_front")
+        or (action == "focus_app" and args.get("raise_window"))
+    )
+
+
+def _request_foreground_consent(
+    action: str,
+    args: Dict[str, Any],
+    session_id: str,
+) -> Optional[str]:
+    """Enforce foreground consent independently from global approvals.
+
+    `approvals.mode: off`, `/yolo`, and one-shot `-z` never count as consent.
+    Interactive CLI/TUI surfaces can present their dedicated computer-use
+    callback. Gateway/desktop runs without that callback fail closed and tell
+    the agent to keep working in the background or ask the user to opt in.
+    """
+    policy = _foreground_policy()
+    if policy == "allow":
+        return None
+    if policy == "never":
+        return json.dumps({
+            "ok": False,
+            "action": action,
+            "code": "foreground_disabled",
+            "error": (
+                "foreground computer use is disabled by "
+                "computer_use.foreground_policy=never"
+            ),
+        })
+
+    cb = _approval_callback
+    if cb is None or _approval_bypass_active(session_id):
+        return json.dumps({
+            "ok": False,
+            "action": action,
+            "code": "foreground_consent_required",
+            "error": (
+                "foreground computer use requires explicit per-action user "
+                "consent; approval bypass is not consent and this surface "
+                "has no interactive computer-use approval callback. Continue "
+                "with AX/background capture and input, or ask the user to "
+                "temporarily set computer_use.foreground_policy=allow."
+            ),
+        })
+
+    summary = _summarize_action(action, args)
+    try:
+        verdict = cb("foreground_control", args, summary)
+    except Exception as exc:
+        logger.warning("foreground approval callback failed: %s", exc)
+        verdict = "deny"
+    if verdict in {"approve_once", "approve_session", "always_approve"}:
+        # Deliberately do not cache: foreground consent is per action.
+        return None
+    if verdict == "timeout":
+        return json.dumps({
+            "ok": False,
+            "action": action,
+            "code": "foreground_consent_timeout",
+            "error": "foreground consent timed out; silence is not consent",
+        })
+    return json.dumps({
+        "ok": False,
+        "action": action,
+        "code": "foreground_denied",
+        "error": "foreground computer use was denied by the user",
+    })
 
 
 def _config_preauthorized(action: str, args: Dict[str, Any]) -> bool:
@@ -582,19 +684,22 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             "code": "bring_to_front_requires_foreground",
         })
 
-    # Approval gate (destructive actions only). A durable config grant is
-    # already the user's authorization, so it stands in for the prompt.
-    if action in _DESTRUCTIVE_ACTIONS and not _config_preauthorized(action, args):
-        err = _request_approval(action, args, session_id)
+    foreground_request = _is_foreground_request(action, args)
+    if foreground_request:
+        err = _request_foreground_consent(action, args, session_id)
         if err is not None:
             return err
-    # Persistent focus is a separate, visible side effect from the input
-    # itself. Keep its approval scope distinct even when the input rung has
-    # already been approved for this session.
-    if args.get("bring_to_front") or (
-        action == "focus_app" and args.get("raise_window")
+
+    # Approval gate (destructive actions only). A durable config grant is
+    # already the user's authorization, so it stands in for the prompt.
+    # Dedicated foreground consent covers the action itself; do not prompt a
+    # second time through the ordinary background-action gate.
+    if (
+        not foreground_request
+        and action in _DESTRUCTIVE_ACTIONS
+        and not _config_preauthorized(action, args)
     ):
-        err = _request_approval("bring_to_front", args, session_id)
+        err = _request_approval(action, args, session_id)
         if err is not None:
             return err
 
@@ -698,7 +803,7 @@ def _dispatch(backend: ComputerUseBackend, action: str, args: Dict[str, Any]) ->
     capture_after = bool(args.get("capture_after"))
 
     if action == "capture":
-        mode = str(args.get("mode", "som"))
+        mode = str(args.get("mode", "ax"))
         if mode not in {"som", "vision", "ax"}:
             return json.dumps({"error": f"bad mode {mode!r}; use som|vision|ax"})
         capture_kwargs: Dict[str, Any] = {"mode": mode, "app": args.get("app")}
@@ -1087,6 +1192,7 @@ _DEFAULT_MAX_ELEMENTS = 100
 # call passing a very large integer would silently disable the safeguard and
 # reintroduce the original unbounded behavior.
 _MAX_ALLOWED_MAX_ELEMENTS = 1000
+_MAX_AX_TREE_CHARS = 30_000
 _MIN_PROVIDER_IMAGE_DIMENSION = 8
 
 
@@ -1338,6 +1444,14 @@ def _capture_response(cap: CaptureResult, max_elements: int = _DEFAULT_MAX_ELEME
         "total_elements": total_elements,
         "summary": summary,
     }
+    if cap.ax_tree and cap.mode == "ax":
+        ax_tree = cap.ax_tree.strip()
+        if len(ax_tree) > _MAX_AX_TREE_CHARS:
+            ax_tree = (
+                ax_tree[:_MAX_AX_TREE_CHARS]
+                + "\n... [AX tree truncated; narrow the target or inspect the saved element tree]"
+            )
+        payload["ax_tree"] = ax_tree
     if truncated_elements:
         payload["truncated_elements"] = truncated_elements
     if elements_file:
@@ -1439,17 +1553,17 @@ def _should_route_through_aux_vision() -> bool:
 
 
 def _capture_after_mode() -> str:
-    """Mode for ``capture_after`` follow-ups. Default ``som`` (screenshot)."""
+    """Mode for ``capture_after`` follow-ups. Default ``ax`` (no image)."""
     try:
         from hermes_cli.config import load_config
 
         raw = ((load_config() or {}).get("computer_use") or {}).get(
-            "capture_after_mode", "som"
+            "capture_after_mode", "ax"
         )
     except Exception:
-        return "som"
-    mode = str(raw or "som").strip().lower()
-    return mode if mode in {"som", "vision", "ax"} else "som"
+        return "ax"
+    mode = str(raw or "ax").strip().lower()
+    return mode if mode in {"som", "vision", "ax"} else "ax"
 
 
 def _route_capture_through_aux_vision(

@@ -1,9 +1,9 @@
 """Schema for the generic `computer_use` tool.
 
 Model-agnostic. Any tool-calling model can drive this. Vision-capable models
-should prefer `capture(mode='som')` then `click(element=N)` — much more
-reliable than pixel coordinates. Pixel coordinates remain supported for
-models that were trained on them (e.g. Claude's computer-use RL).
+should prefer `capture(mode='ax')` then `click(element=N)` — this is precise,
+cheap, and does not require pixels. Request `som` or `vision` only when the
+accessibility surface is missing or visual state materially matters.
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
         "Drive the desktop in the background via cua-driver — screenshots, "
         "mouse, keyboard, scroll, drag — without stealing the user's cursor "
         "or keyboard focus. Supported on macOS, Windows, and Linux. "
-        "Preferred workflow: call with "
-        "action='capture' (mode='som' gives numbered element overlays), "
-        "then click by `element` index for reliability. Pixel coordinates "
-        "are supported for models trained on them. Image captures include a "
+        "Preferred workflow: call action='capture' with mode='ax', then "
+        "click by `element` index and verify with a fresh AX capture. Request "
+        "mode='som' or 'vision' only when the AX tree is insufficient. Pixel "
+        "coordinates remain a fallback. Image captures include a "
         "shareable `screenshot_path`; when the user asks to receive the image "
         "and the current surface supports attachments, deliver that file using "
         "the platform's native MEDIA attachment syntax. Do not automatically "
@@ -73,12 +73,12 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                 "type": "string",
                 "enum": ["som", "vision", "ax"],
                 "description": (
-                    "Capture mode. `som` (default) is a screenshot with "
+                    "Capture mode. `ax` (default) is the accessibility tree "
+                    "only: fastest, most precise, and no image required. "
+                    "`som` is a screenshot with "
                     "numbered overlays on every interactable element plus "
-                    "the AX tree — best for vision models, lets you click "
-                    "by element index. `vision` is a plain screenshot. "
-                    "`ax` is the accessibility tree only (no image; useful "
-                    "for text-only models)."
+                    "the AX tree; use it when pixels are needed. `vision` is "
+                    "a plain screenshot."
                 ),
             },
             "app": {
@@ -228,7 +228,9 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                     "Only for action='focus_app'. If true, brings the "
                     "window to front (DISRUPTS the user). Default false "
                     "— input is routed to the app without raising, "
-                    "matching the background co-work model."
+                    "matching the background co-work model. A true value is "
+                    "also gated by computer_use.foreground_policy; global "
+                    "approval bypass is never foreground consent."
                 ),
             },
             # ── delivery (verify → escalate ladder) ────────────────
@@ -247,7 +249,8 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                     "after `suspected_noop` or a structured refusal. Do not "
                     "predict the rung from the app being Electron/Chromium. "
                     "Foreground is a visible focus change and needs its own "
-                    "approval."
+                    "approval under computer_use.foreground_policy; global "
+                    "approval bypass never counts as foreground consent."
                 ),
             },
             "bring_to_front": {

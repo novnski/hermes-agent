@@ -407,11 +407,31 @@ def test_capability_manifest_reads_config(monkeypatch):
     assert cb._cua_capability_manifest() is None
 
 
-def test_session_yolo_overrides_configured_bounded(monkeypatch):
+def test_session_yolo_preserves_configured_bounded_by_default(monkeypatch):
     import tools.computer_use.tool as cu_tool
 
     monkeypatch.setattr(
         cb, "_computer_use_cfg", lambda: {"permission_mode": "bounded"}
+    )
+    import tools.approval as approval
+
+    monkeypatch.setattr(
+        approval, "is_approval_bypass_active_for_session", lambda sid: True
+    )
+    monkeypatch.setattr(
+        cb, "_cua_unrestricted_on_approval_bypass", lambda: False
+    )
+    assert cu_tool._cua_permission_mode("sess-1") == "bounded"
+
+
+def test_session_yolo_uses_unrestricted_only_with_cua_opt_in(monkeypatch):
+    import tools.computer_use.tool as cu_tool
+
+    monkeypatch.setattr(
+        cb, "_computer_use_cfg", lambda: {"permission_mode": "standard"}
+    )
+    monkeypatch.setattr(
+        cb, "_cua_unrestricted_on_approval_bypass", lambda: True
     )
     import tools.approval as approval
 
