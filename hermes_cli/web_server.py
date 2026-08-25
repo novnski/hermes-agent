@@ -250,6 +250,16 @@ def _parent_start_markers_match(actual: str, expected: str) -> bool:
     return actual_unix_ms == expected_unix_ms
 
 
+def _parent_start_marker_mismatch_is_conclusive(actual: str, expected: str) -> bool:
+    """Whether a marker mismatch proves that the Desktop owner was replaced.
+
+    Linux and Windows markers are machine values. The macOS fallback comes
+    from ``ps -o lstart=`` and is a locale/spacing-sensitive presentation
+    string, so a mismatch there cannot safely prove PID reuse.
+    """
+    return not (actual.startswith("ps:") or expected.startswith("ps:"))
+
+
 # ---------------------------------------------------------------------------
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -19248,8 +19258,11 @@ def _is_serve_orphaned(
     try:
         if expected_start_marker is not None:
             probe = process_start_marker or _process_start_marker
-            return not _parent_start_markers_match(
-                probe(int(desktop_pid)), expected_start_marker
+            actual_start_marker = probe(int(desktop_pid))
+            if _parent_start_markers_match(actual_start_marker, expected_start_marker):
+                return False
+            return _parent_start_marker_mismatch_is_conclusive(
+                actual_start_marker, expected_start_marker
             )
 
         if pid_exists is None:

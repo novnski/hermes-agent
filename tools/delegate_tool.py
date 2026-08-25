@@ -3046,9 +3046,15 @@ def _run_single_child(
         # ChatCompletion, etc.). Treat it as a failure so the parent surfaces
         # it instead of silently accepting zero-content "success".
         _empty_sentinel = summary.strip() == "(empty)"
+        # A terminal child failure may still carry a useful human-readable
+        # error in final_response. The explicit flag remains authoritative:
+        # error text is diagnostic output, not a successfully completed task.
+        _child_failed = bool(result.get("failed"))
 
         if interrupted:
             status = "interrupted"
+        elif _child_failed:
+            status = "failed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
@@ -3098,6 +3104,8 @@ def _run_single_child(
         # Determine exit reason
         if interrupted:
             exit_reason = "interrupted"
+        elif _child_failed:
+            exit_reason = "error"
         elif completed:
             exit_reason = "completed"
         else:

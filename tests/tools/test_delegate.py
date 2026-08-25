@@ -667,6 +667,32 @@ class TestDelegateObservability(unittest.TestCase):
             result = json.loads(delegate_task(goal="Test empty sentinel", parent_agent=parent))
             self.assertEqual(result["results"][0]["status"], "failed")
 
+    def test_non_retryable_child_error_is_not_reported_as_completed(self):
+        parent = _make_mock_parent(depth=0)
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            mock_child.model = "gpt-5.6-luna"
+            mock_child.session_prompt_tokens = 0
+            mock_child.session_completion_tokens = 0
+            mock_child.run_conversation.return_value = {
+                "final_response": "HTTP 401: token expired",
+                "messages": [],
+                "api_calls": 1,
+                "completed": False,
+                "failed": True,
+                "error": "HTTP 401: token expired",
+            }
+            MockAgent.return_value = mock_child
+
+            result = json.loads(delegate_task(goal="Test failure", parent_agent=parent))
+
+        entry = result["results"][0]
+        self.assertEqual(entry["status"], "failed")
+        self.assertEqual(entry["exit_reason"], "error")
+        self.assertIs(entry["truncated"], False)
+        self.assertEqual(entry["summary"], "HTTP 401: token expired")
+
 
 class TestSubagentCostRollup(unittest.TestCase):
     """Port of Kilo-Org/kilocode#9448 — parent's session_estimated_cost_usd
