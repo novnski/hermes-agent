@@ -25,7 +25,7 @@ import {
 } from '@/store/session'
 import { onSessionsChanged } from '@/store/session-sync'
 import { openUpdatesWindow } from '@/store/updates'
-import { isHudWindow, isSecondaryWindow } from '@/store/windows'
+import { isBrowserWindow, isHudWindow, isSecondaryWindow } from '@/store/windows'
 import type { SessionInfo } from '@/types/hermes'
 
 import { requestComposerFocus, requestComposerInsert } from '../../chat/composer/focus'
@@ -94,7 +94,7 @@ export function useDesktopIntegrations({
   // This ref is a one-time lifecycle latch, not a mirror of reactive atom state.
   // eslint-disable-next-line no-restricted-syntax
   useEffect(() => {
-    if (!profileReady || isHudWindow()) {
+    if (!profileReady || isHudWindow() || isBrowserWindow()) {
       return
     }
 
@@ -329,7 +329,7 @@ export function useDesktopIntegrations({
 
   // Another window mutated the shared session list -> re-pull the sidebar.
   useEffect(() => {
-    if (isSecondaryWindow()) {
+    if (isSecondaryWindow() || isBrowserWindow()) {
       return
     }
 
