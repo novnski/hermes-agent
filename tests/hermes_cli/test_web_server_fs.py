@@ -77,6 +77,45 @@ def test_fs_download_rejects_sensitive_files(client, tmp_path):
     assert response.status_code == 403
 
 
+@pytest.mark.parametrize("route", ["read-text", "read-data-url"])
+@pytest.mark.parametrize("name", [".env", "auth.json", "config.yaml"])
+def test_fs_previews_reject_sensitive_files(client, tmp_path, route, name):
+    target = tmp_path / name
+    target.write_text("SECRET=1")
+
+    response = client.get(f"/api/fs/{route}", params={"path": str(target)})
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("name", [".env", "auth.json", "config.yaml"])
+def test_fs_write_rejects_sensitive_files_without_modifying_them(
+    client, tmp_path, name
+):
+    target = tmp_path / name
+    target.write_text("original")
+
+    response = client.post(
+        "/api/fs/write-text",
+        json={"path": str(target), "content": "replacement"},
+    )
+
+    assert response.status_code == 403
+    assert target.read_text() == "original"
+
+
+def test_fs_write_allows_ordinary_workspace_file(client, tmp_path):
+    target = tmp_path / "notes.md"
+
+    response = client.post(
+        "/api/fs/write-text",
+        json={"path": str(target), "content": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert target.read_text() == "hello"
+
+
 def test_fs_endpoints_require_auth(tmp_path):
     client = TestClient(web_server.app)
     target = tmp_path / "secret.txt"

@@ -104,6 +104,17 @@ def resolve_delivery_transport(
     live_adapters = adapters or {}
     native = live_adapters.get(platform)
     native_config = config.platforms.get(platform)
+    if native is None:
+        expected = platform.value.lower()
+        native = next(
+            (
+                candidate
+                for adapter_platform, candidate in live_adapters.items()
+                if str(getattr(adapter_platform, "value", adapter_platform)).lower()
+                == expected
+            ),
+            None,
+        )
     # Preserve DeliveryRouter's historical support for explicitly supplied live
     # adapters with no config block, but never let an explicitly disabled native
     # adapter shadow an enabled Relay transport.
@@ -640,7 +651,6 @@ class DeliveryRouter:
             if _send_result_failed(result):
                 raise RuntimeError(_send_result_error(result) or f"{target.platform.value} delivery failed")
         return result
-
 
 
 

@@ -2257,6 +2257,19 @@ class TestElementTokenAttachment:
         _name, args = backend._session.call_tool.call_args.args
         assert args["element_token"] == "s0002:5"
 
+    def test_snapshot_id_attached_when_element_token_is_absent(self):
+        backend = self._backend_with_session({"click": {"input.pointer.click"}})
+        backend._session.supports_input_property = (
+            lambda tool, prop: tool == "click" and prop == "snapshot_id"
+        )
+        backend._snapshot_id = "snapshot-2"
+
+        backend.click(element=5, button="left")
+
+        _name, args = backend._session.call_tool.call_args.args
+        assert args["snapshot_id"] == "snapshot-2"
+        assert "element_token" not in args
+
 
     def test_capture_refreshes_snapshot_tokens(self):
         """A fresh capture should overwrite any stale tokens from a
@@ -2284,7 +2297,7 @@ class TestElementTokenAttachment:
                 return {
                     "data": '✅ Demo — 2 elements, turn 1\n',
                     "images": [], "image_mime_types": [],
-                    "structuredContent": {"elements": [
+                    "structuredContent": {"snapshot_id": "snapshot-2", "elements": [
                         {"element_index": 1, "role": "AXButton", "label": "OK",
                          "element_token": "snap2:1"},
                         {"element_index": 2, "role": "AXButton", "label": "X",
@@ -2300,6 +2313,7 @@ class TestElementTokenAttachment:
 
         # Stale 99 token is gone; only the two new tokens remain.
         assert backend._snapshot_tokens == {1: "snap2:1", 2: "snap2:2"}
+        assert backend._snapshot_id == "snapshot-2"
 
 
 class TestSessionLifecycle:
