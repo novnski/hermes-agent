@@ -1,6 +1,7 @@
 """Tests for tools/tool_result_storage.py -- 3-layer tool result persistence."""
 
 import pytest
+import json
 from unittest.mock import MagicMock, patch
 
 from tools.budget_config import (
@@ -23,6 +24,7 @@ from tools.tool_result_storage import (
     generate_preview,
     get_spillover_dir,
     maybe_persist_tool_result,
+    maybe_persist_multimodal_tool_result,
 )
 
 
@@ -360,6 +362,27 @@ class TestSpillover:
         assert spill_file.exists()
         assert spill_file.read_text(encoding="utf-8") == content
         assert str(spill_file) in result
+
+    def test_oversized_multimodal_result_spills_losslessly(self):
+        content = {
+            "_multimodal": True,
+            "content": [
+                {"type": "text", "text": "x" * 6_000},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+            "text_summary": "browser capture summary",
+        }
+        result = maybe_persist_multimodal_tool_result(
+            content=content,
+            tool_name="browser_exec",
+            tool_use_id="large_browser",
+            env=None,
+            threshold=1_000,
+        )
+        assert PERSISTED_OUTPUT_TAG in result
+        assert "browser capture summary" in result
+        saved = get_spillover_dir() / "large_browser.txt"
+        assert json.loads(saved.read_text(encoding="utf-8")) == content
 
     def test_local_env_persists_to_spillover_not_sandbox(self):
         """LocalEnvironment routes host-side: no env.execute() shell-out."""

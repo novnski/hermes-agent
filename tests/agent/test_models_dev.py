@@ -1305,3 +1305,22 @@ class TestModelOverrides:
         assert info is not None
         assert "image" in info.input_modalities
         assert info.attachment is True
+
+
+class TestOpencodeVisionFallback:
+    @patch("agent.models_dev.fetch_models_dev", return_value={})
+    def test_vision_slug_fills_catalog_gap(self, _mock):
+        caps = get_model_capabilities(
+            "opencode-go", "deepseek-v4-flash-vision-exp"
+        )
+        assert caps is not None
+        assert caps.supports_vision is True
+        assert caps.supports_tools is True
+
+    @patch("agent.models_dev.fetch_models_dev", return_value={})
+    def test_text_slug_stays_unknown(self, _mock):
+        assert get_model_capabilities("opencode-go", "deepseek-v4-flash") is None
+
+    @patch("agent.models_dev.fetch_models_dev", return_value={})
+    def test_non_opencode_provider_does_not_use_slug_heuristic(self, _mock):
+        assert get_model_capabilities("deepseek", "deepseek-v4-flash-vision-exp") is None

@@ -43,6 +43,7 @@ Defense against context-window overflow operates at three levels:
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -52,6 +53,7 @@ import time
 import uuid
 
 from tools.budget_config import (
+    DEFAULT_MULTIMODAL_RESULT_SIZE_CHARS,
     DEFAULT_PREVIEW_SIZE_CHARS,
     BudgetConfig,
     DEFAULT_BUDGET,
@@ -318,6 +320,7 @@ def maybe_persist_tool_result(
     env=None,
     config: BudgetConfig = DEFAULT_BUDGET,
     threshold: int | float | None = None,
+    preview_content: str | None = None,
 ) -> str:
     """Layer 2: persist oversized result into the sandbox, return preview + path.
 
@@ -345,7 +348,11 @@ def maybe_persist_tool_result(
         return content
 
     filename = _safe_result_filename(tool_use_id)
-    preview, has_more = generate_preview(content, max_chars=config.preview_size)
+    if preview_content is None:
+        preview, has_more = generate_preview(content, max_chars=config.preview_size)
+    else:
+        preview, _ = generate_preview(preview_content, max_chars=config.preview_size)
+        has_more = len(content) > len(preview)
 
     # Always persist host-side first: $HERMES_HOME/cache/spillover is the
     # single canonical home for spilled results (with the other Hermes-owned
@@ -393,6 +400,46 @@ def maybe_persist_tool_result(
         f"{preview}\n\n"
         f"[Truncated: tool response was {len(content):,} chars. "
         f"Full output could not be saved to sandbox.]"
+    )
+
+
+def maybe_persist_multimodal_tool_result(
+    content: dict,
+    tool_name: str,
+    tool_use_id: str,
+    env=None,
+    config: BudgetConfig = DEFAULT_BUDGET,
+    threshold: int = DEFAULT_MULTIMODAL_RESULT_SIZE_CHARS,
+):
+    """Spill only pathological multimodal envelopes before hot-context use."""
+    if not (
+        isinstance(content, dict)
+        and content.get("_multimodal") is True
+        and isinstance(content.get("content"), list)
+    ):
+        return content
+    try:
+        serialized = json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:
+        return content
+    if len(serialized) <= threshold:
+        return content
+    summary = content.get("text_summary")
+    if not isinstance(summary, str) or not summary:
+        text_parts = [
+            str(part.get("text", ""))
+            for part in content["content"]
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        summary = "\n".join(part for part in text_parts if part)
+    return maybe_persist_tool_result(
+        content=serialized,
+        tool_name=tool_name,
+        tool_use_id=tool_use_id,
+        env=env,
+        config=config,
+        threshold=threshold,
+        preview_content=summary or "[oversized multimodal tool result]",
     )
 
 

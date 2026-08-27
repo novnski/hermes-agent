@@ -50,19 +50,13 @@ class TestSchema:
             "focus_app",
         }
 
-    def test_schema_max_elements_documents_default_and_upper_bound(self):
-        """Schema description must agree with the runtime. The original PR
-        text said "Default 100" without a corresponding `default` field, and
-        had no upper bound — both Copilot findings.
+    def test_schema_no_longer_advertises_max_elements(self):
+        """max_elements was removed: captures always cap the surfaced element
+        window at the fixed default and spill the full tree to elements_file,
+        so there is no caller-tunable cap to document.
         """
         from tools.computer_use.schema import COMPUTER_USE_SCHEMA
-        from tools.computer_use.tool import (
-            _DEFAULT_MAX_ELEMENTS,
-            _MAX_ALLOWED_MAX_ELEMENTS,
-        )
-        prop = COMPUTER_USE_SCHEMA["parameters"]["properties"]["max_elements"]
-        assert prop.get("default") == _DEFAULT_MAX_ELEMENTS
-        assert prop.get("maximum") == _MAX_ALLOWED_MAX_ELEMENTS
+        assert "max_elements" not in COMPUTER_USE_SCHEMA["parameters"]["properties"]
 
     def test_schema_teaches_ax_first_background_workflow(self):
         from tools.computer_use.schema import COMPUTER_USE_SCHEMA
@@ -389,10 +383,10 @@ class TestCaptureResponse:
         # the JSON view is partial and can re-issue with a tighter scope.
         assert "truncated to" in parsed["summary"]
 
-    def test_capture_ax_clamps_oversized_max_elements_to_hard_cap(self):
-        """A caller passing a very large `max_elements` must not be able to
-        disable the safeguard. The cap is clamped to a hard upper bound so
-        the context-blow-up protection cannot be bypassed by argument.
+    def test_capture_ax_ignores_stale_max_elements_argument(self):
+        """`max_elements` was removed from the schema; the surfaced window is a
+        fixed cap with the full tree spilled to elements_file. A stale caller
+        still passing max_elements must not be able to raise the cap.
         """
         from tools.computer_use import tool as cu_tool
 
@@ -403,9 +397,12 @@ class TestCaptureResponse:
                 {"action": "capture", "mode": "ax", "max_elements": 10_000}
             )
         parsed = json.loads(out)
-        assert len(parsed["elements"]) == cu_tool._MAX_ALLOWED_MAX_ELEMENTS
+        # Ignored: cap stays at the fixed default regardless of the argument.
+        assert len(parsed["elements"]) == cu_tool._DEFAULT_MAX_ELEMENTS
         assert parsed["total_elements"] == 5000
-        assert parsed["truncated_elements"] == 5000 - cu_tool._MAX_ALLOWED_MAX_ELEMENTS
+        assert parsed["truncated_elements"] == 5000 - cu_tool._DEFAULT_MAX_ELEMENTS
+        # The full tree is spilled so nothing is lost.
+        assert parsed.get("elements_file")
 
 class TestCuaCaptureImageDimensions:
     def test_png_dimensions_are_sniffed_from_image_bytes(self):
@@ -1564,7 +1561,7 @@ class TestCaptureAppFilterNoMatch:
              "structuredContent": None},
         ]
 
-        with patch.object(cb.sys, "platform", "linux"):
+        with patch("tools.computer_use.cua_backend.sys.platform", "linux"):
             backend.capture(mode="ax")
 
         assert backend._active_pid == 200
@@ -2576,59 +2573,6 @@ class TestBoundsSpaceNote:
         assert _bounds_space_note(zero, 0, 0) is None
 
 
-class TestEscalationEnrichment:
-    """Browser-class background_unavailable refusals gain a typed-page hint."""
-
-    def _refusal(self, **overrides):
-        from tools.computer_use.backend import ActionResult
-
-        kw = dict(
-            ok=False, action="type_text", message="refused",
-            code="background_unavailable",
-            escalation={"recommended": "foreground", "reason": "dropped"},
-            meta={"event_kind": "text_input",
-                  "target_class": "Chrome_WidgetWin_1"},
-        )
-        kw.update(overrides)
-        return ActionResult(**kw)
-
-    def test_browser_text_refusal_gains_page_alternative(self):
-        from tools.computer_use.tool import _enrich_escalation
-
-        enriched = _enrich_escalation(self._refusal())
-        # Driver's recommendation is never overridden — only augmented.
-        assert enriched["recommended"] == "foreground"
-        assert enriched["alternative"] == "page"
-        assert "cua_browser_type" in enriched["alternative_hint"]
-
-    def test_non_browser_target_untouched(self):
-        from tools.computer_use.tool import _enrich_escalation
-
-        res = self._refusal(meta={"event_kind": "text_input",
-                                  "target_class": "Notepad"})
-        assert "alternative" not in _enrich_escalation(res)
-
-    def test_non_foreground_recommendation_untouched(self):
-        from tools.computer_use.tool import _enrich_escalation
-
-        res = self._refusal(escalation={"recommended": "px"})
-        assert "alternative" not in _enrich_escalation(res)
-
-    def test_missing_escalation_passthrough(self):
-        from tools.computer_use.backend import ActionResult
-        from tools.computer_use.tool import _enrich_escalation
-
-        assert _enrich_escalation(
-            ActionResult(ok=True, action="click", message="ok")) is None
-
-    def test_enrichment_survives_action_payload(self):
-        from tools.computer_use.tool import _action_payload
-
-        payload = _action_payload(self._refusal())
-        assert payload["escalation"]["alternative"] == "page"
-        assert payload["verdict"]["decision"] == "escalate"
-
-
 class TestElementSpillFile:
     """Detail dropped from the in-context capture must be recoverable on disk."""
 
@@ -2723,13 +2667,26 @@ class TestCaptureScreenshotPersistence:
         monkeypatch.setattr(
             cu_tool, "_should_route_through_aux_vision", lambda: False,
         )
-        out = cu_tool._capture_response(self._capture())
+        out = cu_tool._capture_response(self._capture(), persist=True)
 
         screenshot_path = out["meta"]["screenshot_path"]
         assert screenshot_path in out["text_summary"]
         assert "MEDIA:" not in out["text_summary"]
         assert screenshot_path.startswith(str(tmp_path / "cache" / "images"))
         assert Path(screenshot_path).read_bytes() == base64.b64decode(self._PNG_B64)
+
+    def test_capture_is_transient_by_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from tools.computer_use import tool as cu_tool
+
+        monkeypatch.setattr(
+            cu_tool, "_should_route_through_aux_vision", lambda: False,
+        )
+        out = cu_tool._capture_response(self._capture())
+
+        assert "screenshot_path" not in out.get("meta", {})
+        cache_dir = tmp_path / "cache" / "images"
+        assert not cache_dir.exists() or not list(cache_dir.glob("computer_use_*.*"))
 
     def test_capture_cache_is_bounded(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))

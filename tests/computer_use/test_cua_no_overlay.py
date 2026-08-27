@@ -232,9 +232,7 @@ class TestMcpArgsOverlayFlag:
 
 class TestEmbeddedDaemonOverlayFlag:
     def test_serve_process_disables_overlay_when_policy_requires_it(self):
-        daemon = cua_backend._EmbeddedCuaDaemon(
-            "/usr/bin/cua-driver", "unrestricted"
-        )
+        daemon = cua_backend._EmbeddedCuaDaemon("/usr/bin/cua-driver", "unrestricted")
         process = MagicMock()
         process.poll.return_value = None
         status = MagicMock(returncode=0)
@@ -244,14 +242,16 @@ class TestEmbeddedDaemonOverlayFlag:
             "_resolve_mcp_invocation",
             return_value=("/usr/bin/cua-driver", ["mcp"]),
         ), patch.object(
-            cua_backend, "_cua_no_overlay", return_value=True
+            cua_backend, "_cua_no_overlay", return_value=True,
         ), patch.object(
-            cua_backend, "_cua_driver_supports_no_overlay", return_value=True
+            cua_backend, "_cua_driver_supports_no_overlay", return_value=True,
         ), patch.object(
-            cua_backend.subprocess, "Popen", return_value=process
+            cua_backend.subprocess, "Popen", return_value=process,
         ) as popen, patch.object(
-            cua_backend.subprocess, "run", return_value=status
-        ), patch.object(cua_backend.threading, "Thread"):
+            cua_backend.subprocess, "run", return_value=status,
+        ), patch.object(cua_backend.threading, "Thread"), patch.object(
+            cua_backend.sys, "platform", "linux",
+        ):
             daemon.start()
 
         command = popen.call_args.args[0]

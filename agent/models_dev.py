@@ -1198,7 +1198,7 @@ def get_model_capabilities(
 
     # If no catalog entry and no override, we can't resolve capabilities.
     if entry is None and override is None:
-        return None
+        return _opencode_vision_fallback(provider, model)
 
     # Start from catalog entry (if found), else use defaults.
     if entry is not None:
@@ -1263,6 +1263,27 @@ def get_model_capabilities(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
         model_family=model_family,
+    )
+
+
+def _opencode_vision_fallback(
+    provider: str, model: str
+) -> Optional[ModelCapabilities]:
+    """Fill catalog gaps for explicit OpenCode-family ``-vision`` models."""
+    from hermes_cli.models import opencode_provider_family
+
+    if opencode_provider_family(provider) is None:
+        return None
+    bare = str(model or "").strip().rsplit("/", 1)[-1]
+    if "-vision" not in bare.lower():
+        return None
+    return ModelCapabilities(
+        supports_tools=True,
+        supports_vision=True,
+        supports_reasoning=False,
+        context_window=200000,
+        max_output_tokens=8192,
+        model_family="opencode",
     )
 
 

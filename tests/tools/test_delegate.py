@@ -694,6 +694,38 @@ class TestDelegateObservability(unittest.TestCase):
         self.assertEqual(entry["summary"], "HTTP 401: token expired")
 
 
+class TestDelegationFailureVisibility(unittest.TestCase):
+    def test_session_persistence_cause_reaches_parent(self):
+        parent = _make_mock_parent(depth=0)
+        with patch("run_agent.AIAgent") as MockAgent:
+            child = MagicMock()
+            child.model = "deepseek-v4-flash"
+            child.session_prompt_tokens = 0
+            child.session_completion_tokens = 0
+            child.run_conversation.return_value = {
+                "final_response": "",
+                "completed": False,
+                "failed": True,
+                "interrupted": False,
+                "api_calls": 1,
+                "turn_exit_reason": "session_persistence_failed",
+                "failure_reason": "session_persistence_failed:locked",
+                "error": "Subagent did not produce a response.",
+                "messages": [],
+            }
+            MockAgent.return_value = child
+
+            result = json.loads(delegate_task(goal="Return PING", parent_agent=parent))
+
+        entry = result["results"][0]
+        self.assertEqual(entry["status"], "failed")
+        self.assertEqual(
+            entry["failure_reason"], "session_persistence_failed:locked"
+        )
+        self.assertEqual(entry["turn_exit_reason"], "session_persistence_failed")
+        self.assertIn("session storage", entry["error"].lower())
+
+
 class TestSubagentCostRollup(unittest.TestCase):
     """Port of Kilo-Org/kilocode#9448 — parent's session_estimated_cost_usd
     must include subagent spend, not just the parent's own API calls."""

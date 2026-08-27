@@ -140,3 +140,50 @@ def test_apply_model_switch_does_not_leak_process_env():
     # Sibling session is completely untouched.
     assert sess_a["model_override"] is None
     assert sess_a["agent"].model == "minimax/m3"
+
+
+def test_make_agent_rederives_opencode_go_route_from_model():
+    fake_cfg = {
+        "model": {
+            "default": "deepseek-v4-flash-vision-exp",
+            "provider": "opencode-go",
+        },
+        "agent": {"system_prompt": "test"},
+    }
+    fresh_runtime = {
+        "provider": "opencode-go",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key": "opencode-test-token",
+        "api_mode": "chat_completions",
+        "command": None,
+        "args": None,
+        "credential_pool": None,
+    }
+    stale_override = {
+        "model": "deepseek-v4-flash-vision-exp",
+        "provider": "opencode-go",
+        "base_url": "https://example.invalid/wrong-provider",
+        "api_mode": "anthropic_messages",
+    }
+    with (
+        patch("tui_gateway.server._load_cfg", return_value=fake_cfg),
+        patch("tui_gateway.server._get_db", return_value=MagicMock()),
+        patch("tui_gateway.server._load_tool_progress_mode", return_value="compact"),
+        patch("tui_gateway.server._load_reasoning_config", return_value=None),
+        patch("tui_gateway.server._load_service_tier", return_value=None),
+        patch("tui_gateway.server._load_enabled_toolsets", return_value=None),
+        patch(
+            "hermes_cli.runtime_provider.resolve_runtime_provider",
+            return_value=fresh_runtime,
+        ),
+        patch("run_agent.AIAgent") as mock_agent,
+    ):
+        from tui_gateway.server import _make_agent
+
+        _make_agent("sid-1", "key-1", model_override=stale_override)
+
+    kwargs = mock_agent.call_args.kwargs
+    assert kwargs["provider"] == "opencode-go"
+    assert kwargs["api_mode"] == "chat_completions"
+    assert kwargs["base_url"].rstrip("/") == "https://opencode.ai/zen/go/v1"
+    assert kwargs["api_key"] == "opencode-test-token"

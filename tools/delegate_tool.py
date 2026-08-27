@@ -3171,6 +3171,27 @@ def _run_single_child(
         )
         if status == "failed":
             entry["error"] = result.get("error", "Subagent did not produce a response.")
+            failure_reason = result.get("failure_reason")
+            if isinstance(failure_reason, str) and failure_reason.strip():
+                entry["failure_reason"] = failure_reason
+            turn_exit_reason = result.get("turn_exit_reason")
+            if isinstance(turn_exit_reason, str) and turn_exit_reason.strip():
+                entry["turn_exit_reason"] = turn_exit_reason
+            if turn_exit_reason == "session_persistence_failed":
+                if entry["error"] == "Subagent did not produce a response.":
+                    entry["error"] = (
+                        "Subagent stopped because session storage could not be "
+                        f"written ({failure_reason or 'unknown'}); in-progress "
+                        "work was discarded to protect transcript integrity. "
+                        "Check `hermes doctor` and retry."
+                    )
+                elif (
+                    "session storage" not in entry["error"].lower()
+                    and "session_persistence_failed" not in entry["error"]
+                ):
+                    entry["error"] = (
+                        f"{entry['error']} [cause: {failure_reason or 'unknown'}]"
+                    )
 
         # T1-24: schema-validation outcome — emitted ONLY when a schema was
         # requested, so legacy (schema-less) payloads keep their exact shape.
