@@ -387,4 +387,3 @@ def test_persistent_focus_has_a_separate_approval_scope():
     assert seen == ["foreground_control"]
     assert result["code"] == "foreground_denied"
     assert result["action"] == "click"
-
