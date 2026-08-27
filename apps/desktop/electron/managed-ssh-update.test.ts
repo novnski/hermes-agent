@@ -288,7 +288,9 @@ test('POSIX managed launcher executes the updater command and atomically publish
       {
         ssh: { exec: async () => '' },
         platform: 'Linux',
-        hermesPath: '/bin/true',
+        // The launcher executes locally in this test even though it models a
+        // Linux remote. macOS ships true at /usr/bin/true, not /bin/true.
+        hermesPath: process.platform === 'darwin' ? '/usr/bin/true' : '/bin/true',
         hermesHome: home
       },
       CORRELATION
