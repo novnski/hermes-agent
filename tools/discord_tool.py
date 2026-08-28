@@ -18,7 +18,7 @@ The schema exposed to the model is filtered by two gates:
 2. User config allowlist at ``discord.server_actions``. If the user
    sets a comma-separated list (or YAML list) of action names, only
    those appear in the schema. Empty/unset means all intent-available
-   actions are exposed.
+   actions are exposed. Malformed policies fail closed.
 
 Per-guild permissions (MANAGE_ROLES etc.) are NOT pre-checked — Discord
 returns a 403 at call time and :func:`_enrich_403` maps it to
@@ -1012,15 +1012,20 @@ def _load_allowed_actions_config() -> Optional[List[str]]:
     Returns a list of allowed action names, or ``None`` if the user
     hasn't restricted the set (default: all actions allowed).
 
-    Accepts either a comma-separated string or a YAML list.
-    Unknown action names are dropped with a log warning.
+    Accepts either a comma-separated string or a YAML list. ``None`` is
+    reserved for an absent policy. Config-read failures, unexpected types,
+    and unknown names return an empty allowlist so policy mistakes cannot
+    expose the unrestricted action set.
     """
     try:
         from hermes_cli.config import load_config
         cfg = load_config()
     except Exception as exc:
-        logger.debug("discord: could not load config (%s); allowing all actions.", exc)
-        return None
+        logger.warning(
+            "discord: could not load config (%s); denying all server_actions.",
+            exc,
+        )
+        return []
 
     raw = (cfg.get("discord") or {}).get("server_actions")
     if raw is None or raw == "":
@@ -1032,18 +1037,20 @@ def _load_allowed_actions_config() -> Optional[List[str]]:
         names = [str(n).strip() for n in raw if str(n).strip()]
     else:
         logger.warning(
-            "discord.server_actions: unexpected type %s; ignoring.", type(raw).__name__,
+            "discord.server_actions: unexpected type %s; denying all actions.",
+            type(raw).__name__,
         )
-        return None
+        return []
 
     valid = [n for n in names if n in _ACTIONS]
     invalid = [n for n in names if n not in _ACTIONS]
     if invalid:
         logger.warning(
-            "discord.server_actions: unknown action(s) ignored: %s. "
-            "Known: %s",
+            "discord.server_actions: unknown action(s) %s; denying all "
+            "actions rather than silently widening the remainder. Known: %s",
             ", ".join(invalid), ", ".join(_ACTIONS.keys()),
         )
+        return []
     return valid
 
 

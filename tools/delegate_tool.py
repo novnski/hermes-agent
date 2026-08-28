@@ -3055,6 +3055,11 @@ def _run_single_child(
             status = "interrupted"
         elif _child_failed:
             status = "failed"
+        elif _schema_valid is False:
+            # A schema-constrained result that remains invalid after its one
+            # bounded retry did not fulfill the contract. Fail closed instead
+            # of exposing completed + schema_valid=false to automation.
+            status = "failed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already

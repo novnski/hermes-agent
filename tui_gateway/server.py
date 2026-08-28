@@ -5297,6 +5297,12 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
 
 
 def _runtime_model_config(agent, existing: dict | None = None) -> dict:
+    """Mirror the current runtime identity onto persisted session metadata.
+
+    Falsy runtime values delete earlier keys so an obsolete provider or
+    endpoint cannot survive a model switch and silently route a resumed
+    session through the wrong backend.
+    """
     config = dict(existing or {})
     model = str(getattr(agent, "model", "") or "").strip()
     provider = str(getattr(agent, "provider", "") or "").strip()
@@ -5307,6 +5313,8 @@ def _runtime_model_config(agent, existing: dict | None = None) -> dict:
 
     if model:
         config["model"] = model
+    else:
+        config.pop("model", None)
     if provider:
         if provider.strip().lower() == "custom":
             # ``agent.provider`` is the RESOLVED provider, and for any named
@@ -5337,6 +5345,8 @@ def _runtime_model_config(agent, existing: dict | None = None) -> dict:
                     "custom provider identity lookup failed", exc_info=True
                 )
         config["provider"] = provider
+    else:
+        config.pop("provider", None)
     if base_url:
         config["base_url"] = base_url
     else:

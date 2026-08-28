@@ -1391,3 +1391,50 @@ class TestApiServerEnvOverride:
         assert config.platforms[Platform.API_SERVER].enabled is False
         # The key is still wired through for the shared listener.
         assert config.platforms[Platform.API_SERVER].extra.get("key") == api_server_key
+
+
+class TestEnvCredentialDoesNotOverrideExplicitDisable:
+    CASES = [
+        (Platform.SMS, {"TWILIO_ACCOUNT_SID": "AC123", "TWILIO_AUTH_TOKEN": "tok"}),
+        (Platform.HOMEASSISTANT, {"HASS_TOKEN": "tok"}),
+        (
+            Platform.EMAIL,
+            {
+                "EMAIL_ADDRESS": "a@b.c",
+                "EMAIL_PASSWORD": "pw",
+                "EMAIL_IMAP_HOST": "imap.b.c",
+                "EMAIL_SMTP_HOST": "smtp.b.c",
+            },
+        ),
+        (Platform.WECOM, {"WECOM_BOT_ID": "id", "WECOM_SECRET": "sec"}),
+        (
+            Platform.WECOM_CALLBACK,
+            {"WECOM_CALLBACK_CORP_ID": "cid", "WECOM_CALLBACK_CORP_SECRET": "sec"},
+        ),
+        (Platform.WEIXIN, {"WEIXIN_TOKEN": "tok", "WEIXIN_ACCOUNT_ID": "acc"}),
+    ]
+
+    def test_explicit_disabled_stays_disabled_with_credentials_present(self):
+        for platform, env in self.CASES:
+            config = GatewayConfig(
+                platforms={
+                    platform: PlatformConfig(
+                        enabled=False,
+                        extra={"_enabled_explicit": True},
+                    )
+                }
+            )
+            with patch.dict(os.environ, env, clear=True):
+                _apply_env_overrides(config)
+
+            assert config.platforms[platform].enabled is False, platform.value
+
+    def test_non_explicit_platform_still_auto_enables_from_env(self):
+        for platform, env in self.CASES:
+            config = GatewayConfig(
+                platforms={platform: PlatformConfig(enabled=False)}
+            )
+            with patch.dict(os.environ, env, clear=True):
+                _apply_env_overrides(config)
+
+            assert config.platforms[platform].enabled is True, platform.value

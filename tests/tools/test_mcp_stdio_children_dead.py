@@ -92,3 +92,26 @@ def test_watcher_resolves_when_all_children_are_dead():
             )
 
     asyncio.run(_run())
+
+
+def test_watch_ok_probe_does_not_create_unawaited_coroutine():
+    """Inspect the watcher function without invoking a throwaway coroutine."""
+    import inspect as _inspect
+
+    import tools.mcp_tool as mcp_mod
+
+    source = _inspect.getsource(mcp_mod)
+    assert "isawaitable(_watch_children())" not in source
+    assert "iscoroutinefunction(_watch_children)" in source
+
+
+def test_watch_ok_semantics_mock_vs_real():
+    import inspect
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def _real_watcher():
+        return None
+
+    assert inspect.iscoroutinefunction(_real_watcher) is True
+    assert inspect.iscoroutinefunction(AsyncMock()) is True
+    assert inspect.iscoroutinefunction(MagicMock()) is False

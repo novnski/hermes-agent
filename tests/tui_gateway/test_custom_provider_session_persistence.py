@@ -102,6 +102,48 @@ class TestRuntimeModelConfigPersistsEntryIdentity:
 
         assert _runtime_model_config(agent)["provider"] == "anthropic"
 
+    def test_falsy_provider_removes_stale_route(self):
+        from tui_gateway.server import _runtime_model_config
+
+        agent = types.SimpleNamespace(
+            model="deepseek-v4-flash",
+            provider="",
+            base_url="",
+            api_mode="",
+            reasoning_config=None,
+            service_tier=None,
+        )
+        config = _runtime_model_config(
+            agent,
+            {
+                "model": "old-model",
+                "provider": "retired-provider",
+                "base_url": "https://retired.invalid/v1",
+                "api_mode": "chat_completions",
+            },
+        )
+
+        assert config == {"model": "deepseek-v4-flash"}
+
+    def test_falsy_model_removes_stale_model(self):
+        from tui_gateway.server import _runtime_model_config
+
+        agent = types.SimpleNamespace(
+            model="",
+            provider="openai-codex",
+            base_url="",
+            api_mode="",
+            reasoning_config=None,
+            service_tier=None,
+        )
+        config = _runtime_model_config(
+            agent,
+            {"model": "old-model", "provider": "old-provider"},
+        )
+
+        assert "model" not in config
+        assert config["provider"] == "openai-codex"
+
 
 def _make_agent_with_override(override, monkeypatch, config, model_cfg=None):
     """Run _make_agent through the REAL resolve_runtime_provider against a
@@ -341,5 +383,4 @@ class TestModelNameRecoversEntryIdentity:
             rp.find_custom_provider_identity_by_model("hermes-ultra-sft")
             == "custom:hermes-ultra"
         )
-
 
