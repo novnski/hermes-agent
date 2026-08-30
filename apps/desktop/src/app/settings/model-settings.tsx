@@ -501,7 +501,9 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
       .filter(entry => {
         const p = (entry.provider ?? '').toLowerCase()
 
-        return p && p !== 'auto' && p !== mainProvider
+        // `main` is a backend alias that follows the active provider, so it
+        // cannot be a stale provider pin.
+        return p && p !== 'auto' && p !== 'main' && p !== mainProvider
       })
       .map(entry => ({ task: entry.task, provider: entry.provider, model: entry.model }))
   }, [auxiliary, mainModel])

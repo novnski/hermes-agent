@@ -7863,7 +7863,9 @@ def _apply_model_assignment_sync(
                 slot_provider = str(slot_cfg.get("provider", "") or "").strip()
                 if (
                     slot_provider
-                    and slot_provider.lower() not in {"auto", ""}
+                    # ``main`` follows the active provider and can never be a
+                    # stale auxiliary pin (agent.auxiliary_client).
+                    and slot_provider.lower() not in {"auto", "", "main"}
                     and slot_provider.lower() != new_provider
                 ):
                     stale_aux.append({

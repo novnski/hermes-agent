@@ -409,6 +409,18 @@ describe('ModelSettings', () => {
     // Banner present on load, no switch required.
     expect(await screen.findByText(/still run on/)).toBeTruthy()
   })
+
+  it('does not warn when an aux slot follows the main provider alias', async () => {
+    getAuxiliaryModels.mockResolvedValueOnce({
+      main: { provider: 'nous', model: 'hermes-4' },
+      tasks: [{ task: 'vision', provider: 'main', model: 'kimi-k3', base_url: '' }]
+    })
+
+    await renderModelSettings()
+    await screen.findByRole('button', { name: 'Apply' })
+
+    expect(screen.queryByText(/still run on/)).toBeNull()
+  })
 })
 
 describe('ModelSettings MoA preset editor', () => {

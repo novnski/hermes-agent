@@ -233,6 +233,27 @@ def _extract_item_text(item: Any) -> Optional[str]:
     return None
 
 
+def _has_retainable_image_content(item: Any) -> bool:
+    """Return whether a normalized Responses item has a valid image part.
+
+    Codex response conversion owns the ``input_image`` representation. Keep
+    this predicate deliberately narrow so malformed or unknown multipart
+    placeholders do not gain durable-history authority.
+    """
+    if not isinstance(item, dict):
+        return False
+    content = item.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(part, dict)
+        and str(part.get("type") or "").strip().lower() == "input_image"
+        and isinstance(part.get("image_url"), str)
+        and bool(part["image_url"].strip())
+        for part in content
+    )
+
+
 def _is_summary_item(item: Any) -> bool:
     """True when *item* is a canonical Hermes compression-summary message.
 
@@ -388,12 +409,11 @@ def prune_pre_checkpoint_items(
             continue
 
         text = _extract_item_text(item)
-        if text is None:
+        has_retainable_image = is_user and _has_retainable_image_content(item)
+        if text is None and not has_retainable_image:
             continue
-        # Image-only user messages have empty text but non-empty content —
-        # main retains them at 1-token cost (images count as zero, matching
-        # Codex's retention accounting). Don't skip them just because text
-        # is falsy.
+        if text is None:
+            text = ""
         if not text and not is_user:
             continue
 

@@ -3320,14 +3320,32 @@ class AIAgent:
             if event is None:
                 return
             fence = vars(self).get("_active_compression_commit_fence")
+            try_cancel_before_commit = getattr(
+                type(fence), "try_cancel_before_commit", None
+            )
+            if callable(try_cancel_before_commit):
+                try:
+                    # The compression worker retains the fence lock throughout
+                    # an admitted commit. Never pin /stop (and the redirect
+                    # lock it owns) behind that potentially long DB mutation.
+                    # Publishing the stop is safe even when the commit already
+                    # won: the mutation still finishes atomically and the turn
+                    # observes the stop immediately afterward.
+                    try_cancel_before_commit(fence)
+                    event.set()
+                    return
+                except Exception:
+                    logger.debug(
+                        "Compression hard-cancel fence admission failed",
+                        exc_info=True,
+                    )
             cancel_before_commit = getattr(
                 type(fence), "cancel_before_commit", None
             )
             if callable(cancel_before_commit):
                 try:
-                    # This sets the Event while holding the same lock used by
-                    # begin_commit(). If commit already won, it waits for that
-                    # tracked mutation to finish before publishing the stop.
+                    # Legacy fences without a non-blocking form still set the
+                    # Event while holding the begin_commit lock.
                     cancel_before_commit(fence, event)
                     return
                 except Exception:

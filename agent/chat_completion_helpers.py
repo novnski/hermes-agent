@@ -4249,7 +4249,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 model_name = chunk.model
 
             # Accumulate reasoning content
-            reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            reasoning_text = getattr(delta, "reasoning_content", None)
+            if not isinstance(reasoning_text, str) or not reasoning_text:
+                reasoning_text = getattr(delta, "reasoning", None)
+            if not isinstance(reasoning_text, str):
+                reasoning_text = None
             if reasoning_text:
                 # Summary-part models (gpt-5.x and other Responses relays) send
                 # one complete markdown block per delta with no separator, so
@@ -4265,9 +4269,15 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
             # Accumulate text content — fire callback only when no tool calls.
             # Some OpenAI-compatible providers emit a text delta as a list of
-            # content blocks.  Convert it once so callbacks and the synthetic
-            # completion message always receive plain text.
-            delta_content = flatten_message_text(getattr(delta, "content", None), sep="")
+            # content blocks. Convert valid text once so callbacks and the
+            # synthetic completion message always receive plain text. Ignore
+            # malformed scalar token ids instead of stringifying them.
+            raw_delta_content = getattr(delta, "content", None)
+            delta_content = (
+                flatten_message_text(raw_delta_content, sep="")
+                if isinstance(raw_delta_content, (str, list))
+                else None
+            )
             if delta_content:
                 content_parts.append(delta_content)
                 if not tool_calls_acc:
