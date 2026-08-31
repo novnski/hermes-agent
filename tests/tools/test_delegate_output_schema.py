@@ -227,6 +227,7 @@ class TestRunSingleChildSchemaValidation:
         assert entry["schema_errors"]
         assert entry["schema_retries"] == 1
         assert entry["status"] == "failed"
+        assert "output_schema" in entry["error"]
         # exactly ONE retry — bounded
         assert len(child.calls) == 2
 
@@ -246,6 +247,7 @@ class TestRunSingleChildSchemaValidation:
         assert entry["status"] == "failed"
         assert entry["schema_valid"] is False
         assert entry["schema_errors"]
+        assert "output_schema" in entry["error"]
 
     def test_schema_valid_completion_keeps_completed_status(self):
         child = _StubChild(['{"city": "Berlin"}'])
@@ -253,6 +255,7 @@ class TestRunSingleChildSchemaValidation:
         entry = _run(child)
         assert entry["status"] == "completed"
         assert entry["schema_valid"] is True
+        assert "error" not in entry
 
     def test_no_schema_keeps_legacy_result_shape(self):
         """Schema-less calls must not gain new keys (wire-shape pinning)."""

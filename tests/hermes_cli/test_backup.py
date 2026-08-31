@@ -1186,6 +1186,28 @@ class TestSafeCopyDb:
         p.write_bytes(bytes(4096))  # all NULs
         assert is_zeroed_sqlite_file(p) is True
 
+    def test_is_zeroed_sqlite_file_detects_empty_file(self, tmp_path):
+        from hermes_cli.backup import is_zeroed_sqlite_file
+
+        p = tmp_path / "state.db"
+        p.write_bytes(b"")
+
+        assert is_zeroed_sqlite_file(p) is True
+
+    def test_is_zeroed_sqlite_file_never_flags_healthy_database(self, tmp_path):
+        from hermes_cli.backup import is_zeroed_sqlite_file
+
+        p = tmp_path / "state.db"
+        conn = sqlite3.connect(str(p))
+        try:
+            conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+            conn.execute("INSERT INTO messages (body) VALUES ('hello')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert is_zeroed_sqlite_file(p) is False
+
 
 # ---------------------------------------------------------------------------
 # Quick state snapshot tests
@@ -1850,7 +1872,6 @@ class TestMemoryProviderExternalPaths:
         assert (restored.stat().st_mode & 0o777) == 0o600
         # External state did NOT leak into HERMES_HOME.
         assert not (hermes_home / "_external").exists()
-
 
 
 

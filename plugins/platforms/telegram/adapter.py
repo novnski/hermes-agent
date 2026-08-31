@@ -4389,6 +4389,9 @@ class TelegramAdapter(BasePlatformAdapter):
         ))
         # Handle inline keyboard button callbacks (update prompts)
         app.add_handler(CallbackQueryHandler(self._handle_callback_query))
+        # Bot API rich_message blocks can arrive without text/caption and miss
+        # every group-0 filter. Recover them after the normal handlers run.
+        app.add_handler(TypeHandler(Update, self._handle_rich_only_message), group=100)
         # Inline command picker (@botname <query>) — searchable, uncapped
         # access to every command/skill. Inert until the bot owner enables
         # inline mode via BotFather /setinline (Telegram never delivers
@@ -9849,6 +9852,42 @@ class TelegramAdapter(BasePlatformAdapter):
 
         event = self._build_message_event(msg, MessageType.TEXT, update_id=update.update_id)
         event.text = self._clean_bot_trigger_text(event.text)
+        await self._cache_replied_media(msg, event)
+        event = self._apply_telegram_group_observe_attribution(event)
+        self._enqueue_text_event(event)
+
+    async def _handle_rich_only_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Flatten an otherwise-unhandled rich-only Telegram message to text."""
+        msg = self._effective_update_message(update)
+        if not msg:
+            return
+        if getattr(msg, "text", None) or getattr(msg, "caption", None):
+            return
+        rich_text = self._extract_rich_reply_text(msg)
+        if not rich_text:
+            return
+        if not self._is_user_authorized_from_message(msg):
+            logger.warning(
+                "[Telegram] Blocked unauthorized user %s in chat %s",
+                getattr(getattr(msg, "from_user", None), "id", None),
+                getattr(getattr(msg, "chat", None), "id", None),
+            )
+            return
+        if not self._should_process_message(msg):
+            return
+        await self._ensure_forum_commands(msg)
+
+        logger.info(
+            "[%s] Recovered rich-only message as plaintext (%d chars)",
+            self.name,
+            len(rich_text),
+        )
+        event = self._build_message_event(
+            msg, MessageType.TEXT, update_id=update.update_id
+        )
+        event.text = self._clean_bot_trigger_text(rich_text)
         await self._cache_replied_media(msg, event)
         event = self._apply_telegram_group_observe_attribution(event)
         self._enqueue_text_event(event)
