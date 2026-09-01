@@ -266,5 +266,3 @@ class TestSendWithRetryFloodCap:
         assert len(sleeps) == 2
         assert sleeps[0] >= 19.0  # 20 - 1 (max jitter)
         assert sleeps[1] >= 9.0   # 10 - 1 (max jitter)
-
-
