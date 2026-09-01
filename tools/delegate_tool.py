@@ -3320,6 +3320,10 @@ def _run_single_child(
         )
         if status == "failed":
             if _schema_valid is False and summary and not _empty_sentinel:
+                # The child DID respond — the response just violates the
+                # declared contract. Name that instead of the generic
+                # "no response" error; schema_errors (below) hold the
+                # validator's specifics verbatim.
                 entry["error"] = (
                     "Final answer does not satisfy the declared "
                     "output_schema (after 1 retry)."
