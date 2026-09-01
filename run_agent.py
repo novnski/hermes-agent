@@ -3488,6 +3488,14 @@ class AIAgent:
             # turn's legitimate pending compression. The destructive half
             # runs in _cancel_pending_compression_commit(), only after the
             # claim survived the final mutation edge.
+            # An explicit user stop is already authoritative and must surface
+            # promptly even when an atomic SessionDB commit has crossed its
+            # boundary. The commit finishes in its worker and observes the
+            # stop immediately afterward. Only the watchdog's conditional
+            # generation claim needs to wait here so resumed activity can
+            # still veto a stale abort before publication.
+            if require_generation is None:
+                return
             fence = vars(self).get("_active_compression_commit_fence")
             if fence is None:
                 return
