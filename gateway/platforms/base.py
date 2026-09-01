@@ -5759,7 +5759,18 @@ class BasePlatformAdapter(ABC):
             return result
 
         error_str = result.error or ""
-        is_network = result.retryable or self._is_retryable_error(error_str)
+        # A server-requested retry_after (e.g. Telegram FloodWait, HTTP 429)
+        # is authoritative regardless of the retryable flag or error-string
+        # classification. The adapter's fail-closed flood path returns
+        # retry_after WITHOUT retryable=True, so gate the retry path on the
+        # presence of retry_after too — otherwise an over-cap FloodWait skips
+        # backoff and falls straight into the plain-text fallback send, which
+        # re-hits the same ban (renewing it) while the bot is rate-limited.
+        is_network = (
+            result.retryable
+            or result.retry_after is not None
+            or self._is_retryable_error(error_str)
+        )
 
         # Timeout errors are not safe to retry (message may have been
         # delivered) and not formatting errors — return the failure as-is.
@@ -5794,7 +5805,7 @@ class BasePlatformAdapter(ABC):
                 error_str = result.error or ""
                 if result.retry_after is not None:
                     server_retry_after = result.retry_after
-                if not (result.retryable or self._is_retryable_error(error_str)):
+                if not (result.retryable or result.retry_after is not None or self._is_retryable_error(error_str)):
                     break  # error switched to non-transient — fall through to plain-text fallback
             else:
                 # All retries exhausted (loop completed without break) — notify user

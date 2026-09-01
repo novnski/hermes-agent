@@ -206,3 +206,65 @@ class TestSendWithRetryAfter:
         second_sleep = mock_sleep.call_args_list[1][0][0]
         assert second_sleep >= 29.0  # 30 - 1 (max jitter)
 
+
+# ---------------------------------------------------------------------------
+# _send_with_retry — flood result with retry_after but retryable=False
+# ---------------------------------------------------------------------------
+
+class TestSendWithRetryFloodCap:
+    """Regression: the Telegram adapter's ``_flood_cap_result`` returns a
+    SendResult carrying ``retry_after`` (the server's FloodWait) but does NOT
+    set ``retryable=True``. ``_send_with_retry`` must still honor that
+    server-requested ``retry_after`` by backing off and retrying, instead of
+    falling straight through to an immediate plain-text fallback send that
+    re-hits the same flood ban (renewing it) while the bot is rate-limited.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_after_honored_when_retryable_false(self):
+        adapter = _StubAdapter()
+        # First result mirrors _flood_cap_result(wait=30): retry_after set,
+        # retryable left False. A plain-text fallback would be a wasteful second
+        # trip into the ban; the correct behaviour is to back off ~retry_after
+        # and retry the SAME content.
+        adapter._send_results = [
+            SendResult(success=False, error="flood_control:30.0", retry_after=30.0),
+            SendResult(success=True, message_id="ok"),
+        ]
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await adapter._send_with_retry("chat1", "hello", max_retries=2, base_delay=2.0)
+        assert result.success
+        # Exactly one retry happened (no plain-text fallback): 2 sends total.
+        assert len(adapter._send_calls) == 2
+        # The retry kept the ORIGINAL content (not the "(Response formatting failed…)" fallback).
+        assert adapter._send_calls[1][1] == "hello"
+        # The sleep honored the server retry_after (~30s), not base_delay (~2s).
+        first_sleep = mock_sleep.call_args_list[0][0][0]
+        assert first_sleep >= 29.0  # 30 - 1 (max jitter)
+
+    @pytest.mark.asyncio
+    async def test_flood_on_retry_keeps_backing_off(self):
+        """A flood result that comes back ON a retry attempt (retryable=False,
+        retry_after set) must keep the retry loop going with the new backoff,
+        not break out to the plain-text fallback (which would re-hit the ban).
+        """
+        adapter = _StubAdapter()
+        adapter._send_results = [
+            SendResult(success=False, error="flood_control:20.0", retry_after=20.0),
+            # The retry itself is also flood-capped (ban still active).
+            SendResult(success=False, error="flood_control:10.0", retry_after=10.0),
+            SendResult(success=True, message_id="ok"),
+        ]
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await adapter._send_with_retry("chat1", "hello", max_retries=3, base_delay=2.0)
+        assert result.success
+        # 3 sends total: initial + 2 retries. No plain-text fallback.
+        assert len(adapter._send_calls) == 3
+        assert all(call[1] == "hello" for call in adapter._send_calls)
+        # Both sleeps honored the server retry_after values, not base_delay.
+        sleeps = [c[0][0] for c in mock_sleep.call_args_list]
+        assert len(sleeps) == 2
+        assert sleeps[0] >= 19.0  # 20 - 1 (max jitter)
+        assert sleeps[1] >= 9.0   # 10 - 1 (max jitter)
+
+
