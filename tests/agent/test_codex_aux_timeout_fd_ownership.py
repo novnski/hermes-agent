@@ -72,10 +72,13 @@ class TestCodexAuxiliaryTimeoutFdOwnership:
         adapter's ``finally``."""
 
         def _stalled():
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline:
-                time.sleep(0.02)
-                yield SimpleNamespace(type="response.in_progress")
+            # Block the owning iterator past the watchdog window. Emitting
+            # keepalives every few milliseconds makes the owner and Timer race
+            # to claim the same deadline under a saturated parallel runner,
+            # which sometimes exercises the separate owner-close path instead
+            # of the stranger-thread shutdown path this test is meant to pin.
+            time.sleep(0.6)
+            yield SimpleNamespace(type="response.in_progress")
 
         adapter, events = _adapter_with_recording_client(_stalled())
         owner_tid = threading.get_ident()
