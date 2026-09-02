@@ -66,6 +66,25 @@ class TestSchema:
         assert "mode='ax'" in description
         assert "`ax` (default)" in mode["description"]
 
+    def test_element_schema_requires_exact_zero_based_capture_index(self):
+        """The model must pass through cua-driver's displayed index unchanged."""
+        from tools.computer_use.schema import COMPUTER_USE_SCHEMA
+
+        description = COMPUTER_USE_SCHEMA["parameters"]["properties"]["element"]["description"]
+        assert "0-based" in description
+        assert "exactly as returned" in description
+        assert "1-based" not in description
+
+    def test_coordinate_schema_uses_native_desktop_space(self):
+        """Screenshot pixels can be downscaled; raw clicks use native coordinates."""
+        from tools.computer_use.schema import COMPUTER_USE_SCHEMA
+
+        description = COMPUTER_USE_SCHEMA["parameters"]["properties"]["coordinate"]["description"]
+        normalized = description.lower()
+        assert "native desktop coordinates" in normalized
+        assert "element bounds" in normalized
+        assert "relative to the captured window screenshot" not in normalized
+
 
 class TestRegistration:
     def test_tool_registers_with_registry(self):
@@ -2225,7 +2244,10 @@ class TestElementTokenAttachment:
                 return cap in capabilities.get(tool, set())
             return any(cap in caps for caps in capabilities.values())
         backend._session.supports_capability = _supports
-        backend._session.supports_input_property = lambda _tool, _prop: False
+        backend._session.supports_input_property = lambda tool, prop: (
+            prop in backend._session._tool_schemas.get(tool, {}).get("properties", {})
+        )
+        backend._session._tool_schemas = {}
         backend._active_pid = 111
         backend._active_window_id = 222
         return backend
@@ -2528,8 +2550,11 @@ class TestCapturePayloadBudget:
         cap = CaptureResult(mode="som", width=1024, height=768,
                             png_b64="iVBORw0KGgo=", elements=elements,
                             app="X", window_title="t", png_bytes_len=10)
-        with patch("model_tools._run_async",
-                   return_value=json.dumps({"analysis": "a screen"})):
+        with patch("tools.vision_tools.vision_analyze_tool",
+                   new=lambda *_args, **_kwargs: object()), patch(
+                       "model_tools._run_async",
+                       return_value=json.dumps({"analysis": "a screen"}),
+                   ):
             out = cu_tool._route_capture_through_aux_vision(
                 cap, "summary",
                 visible_elements=elements[:5], truncated_elements=45,

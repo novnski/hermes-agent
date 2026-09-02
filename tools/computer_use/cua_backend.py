@@ -4114,11 +4114,11 @@ class CuaDriverBackend(ComputerUseBackend):
            supplied. Returns an explicit 'stale' error if the snapshot
            has been superseded."
 
-        Gated on either the per-tool capability claim or the live input
-        schema. cua-driver 0.22 exposes `element_token` in inputSchema but no
-        longer repeats Hermes's older `accessibility.element_tokens` token;
-        the schema is authoritative for whether additionalProperties=false
-        will accept the field.
+        Compatible drivers expose `element_token` either through the
+        capability list or directly in the live tool schema. The schema is
+        authoritative when capability metadata is absent; older drivers that
+        accept neither remain untouched because they commonly reject unknown
+        fields with `additionalProperties: false`.
         """
         idx = args.get("element_index")
         if not isinstance(idx, int):
@@ -4126,13 +4126,12 @@ class CuaDriverBackend(ComputerUseBackend):
         token = self._snapshot_tokens.get(idx)
         supports_token = token and (
             self._session.supports_capability(
-            "accessibility.element_tokens", tool=tool
+                "accessibility.element_tokens", tool=tool
             )
             or self._session.supports_input_property(tool, "element_token")
         )
         if supports_token:
             args["element_token"] = token
-            return
         snapshot_id = getattr(self, "_snapshot_id", None)
         if snapshot_id and self._session.supports_input_property(
             tool, "snapshot_id"
