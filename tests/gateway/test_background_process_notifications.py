@@ -685,6 +685,10 @@ async def test_async_delegation_apiserver_persist_failure_is_retryable(
         "type": "async_delegation",
         "delegation_id": "deleg_fail",
         "session_key": "raw-sid",
+        # The fork deliberately refuses to infer async-delegation ownership
+        # from a raw session_key. Supply the dispatch-stamped identity so this
+        # reaches the API-server delivery persistence failure path.
+        "origin_session_id": "raw-sid",
     }
     result = await runner._inject_watch_notification("[BATCH COMPLETE]", evt)
     assert result is False
