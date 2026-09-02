@@ -3064,7 +3064,9 @@ class TestInboundMediaAuthorizationGate:
         parent = tmp_path
         private_parts = []
         for index in range(6):
-            part = f"private-{index}-" + ("x" * 150)
+            # Keep the aggregate path long enough to exercise error bounding,
+            # but below macOS's total pathname limit.
+            part = f"private-{index}-" + ("x" * 70)
             private_parts.append(part)
             parent = parent / part
             parent.mkdir()

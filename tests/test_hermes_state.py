@@ -890,19 +890,25 @@ class TestFTS5Search:
         ]
         assert all("context" in row and row["context"] for row in default)
 
-    def test_search_projection_skips_context_enrichment_queries(self, db):
+    def test_search_projection_skips_context_enrichment_queries(self, db, monkeypatch):
         db.create_session(session_id="s1", source="cli")
         db.append_message("s1", role="user", content="before")
         db.append_message("s1", role="assistant", content="projectionneedle")
         db.append_message("s1", role="user", content="after")
 
         statements = []
-        read_conn = db._get_read_conn() or db._conn
-        traced_connections = [db._conn]
-        if read_conn is not db._conn:
-            traced_connections.append(read_conn)
-        for conn in traced_connections:
-            conn.set_trace_callback(statements.append)
+        traced_connections = {id(db._conn): db._conn}
+        db._conn.set_trace_callback(statements.append)
+        original_checkout = db._checkout_read_conn
+
+        def traced_checkout():
+            conn = original_checkout()
+            if conn is not None and id(conn) not in traced_connections:
+                conn.set_trace_callback(statements.append)
+                traced_connections[id(conn)] = conn
+            return conn
+
+        monkeypatch.setattr(db, "_checkout_read_conn", traced_checkout)
 
         def context_query_count():
             normalized = (" ".join(sql.upper().split()) for sql in statements)
@@ -927,7 +933,7 @@ class TestFTS5Search:
             assert default[0]["context"]
             assert context_query_count() == 2
         finally:
-            for conn in traced_connections:
+            for conn in traced_connections.values():
                 conn.set_trace_callback(None)
 
     def test_sanitize_fts5_query_strips_dangerous_chars(self):

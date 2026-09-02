@@ -10,6 +10,22 @@ import pytest
 from hermes_cli.main import cmd_update, PROJECT_ROOT
 
 
+@pytest.fixture(autouse=True)
+def _isolate_host_launchd(monkeypatch):
+    from hermes_cli import update_cmd
+
+    monkeypatch.setattr(
+        update_cmd,
+        "_restart_launchd_gateway_after_update",
+        lambda **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        update_cmd,
+        "_restart_macos_launchd_gateways",
+        lambda *_args, **_kwargs: None,
+    )
+
+
 def _make_run_side_effect(branch="main", verify_ok=True, commit_count="0"):
     """Build a side_effect function for subprocess.run that simulates git commands."""
 

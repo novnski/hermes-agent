@@ -6941,8 +6941,6 @@ def _service_unit_supports_graceful_sigusr1_restart(svc_name: str) -> bool:
 
 def _warn_incomplete_gateway_fleet_restart(failed_units: list) -> None:
     """Print an explicit incomplete-update warning for unrestarted units."""
-    from hermes_cli.gateway import is_macos
-
     if not failed_units:
         return
     # Preserve discovery order while de-duplicating.
@@ -6957,7 +6955,9 @@ def _warn_incomplete_gateway_fleet_restart(failed_units: list) -> None:
     print("⚠ Update incomplete — some units were not restarted:")
     for name in ordered:
         print(f"    - {name}")
-    if is_macos():
+    launchd_labels = [name for name in ordered if name.startswith("ai.hermes.")]
+    systemd_units = [name for name in ordered if not name.startswith("ai.hermes.")]
+    if launchd_labels:
         # A launchd label reaches this list when launchd was not supervising a
         # live process after the restart (#88848), so the unit is not merely
         # stale — it is very likely deregistered, and `launchctl kickstart`
@@ -6966,17 +6966,15 @@ def _warn_incomplete_gateway_fleet_restart(failed_units: list) -> None:
         print("  running pre-update code (mixed sys.modules). Recover with:")
         print("    hermes gateway status")
         print("    launchctl list | grep <label>")
+        print("    launchctl kickstart -k gui/$UID/<label>   # or user/$UID")
         print("    launchctl bootstrap gui/$(id -u) "
               "~/Library/LaunchAgents/<label>.plist")
-        return
-    print("  Skipped units may still be running pre-update code (mixed")
-    print("  sys.modules). Restart them manually, then verify:")
-    print("    hermes gateway status")
-    if any(not name.startswith("ai.hermes.") for name in ordered):
+    if systemd_units:
+        print("  Skipped units may still be running pre-update code (mixed")
+        print("  sys.modules). Restart them manually, then verify:")
+        print("    hermes gateway status")
         print("    systemctl --user restart <unit>   # user-scope")
         print("    sudo systemctl restart <unit>     # system-scope")
-    if any(name.startswith("ai.hermes.") for name in ordered):
-        print("    launchctl kickstart -k gui/$UID/<label>   # macOS (or user/$UID)")
 
 
 def _restart_launchd_gateway_after_update(

@@ -26,6 +26,20 @@ from hermes_cli import update_cmd
 from hermes_constants import get_hermes_home
 
 
+@pytest.fixture(autouse=True)
+def _isolate_host_launchd(monkeypatch):
+    monkeypatch.setattr(
+        update_cmd,
+        "_restart_launchd_gateway_after_update",
+        lambda **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        update_cmd,
+        "_restart_macos_launchd_gateways",
+        lambda *_args, **_kwargs: None,
+    )
+
+
 def _make_head_moved_side_effect(pre_sha="abc123", post_sha="def456"):
     """Simulate git commands where HEAD advances from pre_sha to post_sha."""
     calls = {"n": 0}
