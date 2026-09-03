@@ -32,10 +32,12 @@ import json
 import logging
 import os
 from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 
 from agent.redact import redact_sensitive_text
 from hermes_cli.goals import judge_goal
 from tools.registry import registry, tool_error
+from tools.url_safety import create_ssrf_safe_client, is_safe_url
 from hermes_cli.config import cfg_get, load_config
 
 logger = logging.getLogger(__name__)
@@ -1201,11 +1203,11 @@ def _download_url_with_cap(url: str, max_bytes: int) -> tuple[bytes, Optional[st
     """Fetch ``url`` over http(s) with SSRF guarding, capped at ``max_bytes``.
 
     Every hop — the initial URL and each redirect target — is validated with
-    ``tools.url_safety.is_safe_url`` before it is fetched, so a
-    model-controlled URL (or a public host 302ing to one) cannot reach
-    loopback, private/CGNAT ranges, or cloud metadata endpoints. Redirects
-    are followed manually (``follow_redirects=False``) so each Location is
-    re-checked, mirroring ``tools.skills_hub._guarded_http_get``.
+    ``tools.url_safety.is_safe_url`` before it is fetched. The shared
+    SSRF-safe client also validates and pins DNS at TCP connect time, closing
+    the gap where a hostname could resolve publicly during preflight and then
+    rebind to an internal address. Redirects are followed manually
+    (``follow_redirects=False``) so each Location is re-checked.
 
     Returns ``(data, content_type)``. Raises ``ValueError`` for a non-http(s)
     scheme, an SSRF-blocked target, too many redirects, or a body that
@@ -1213,48 +1215,46 @@ def _download_url_with_cap(url: str, max_bytes: int) -> tuple[bytes, Optional[st
     chunks so an oversize response is rejected without buffering the whole
     thing.
     """
-    from urllib.parse import urljoin, urlparse
-
-    import httpx
-
-    from tools.url_safety import is_safe_url
-
     current_url = url
-    for _ in range(_MAX_ATTACH_URL_REDIRECTS + 1):
-        scheme = (urlparse(current_url).scheme or "").lower()
-        if scheme not in ("http", "https"):
-            raise ValueError(
-                f"unsupported URL scheme {scheme!r}; only http/https are allowed"
-            )
-        if not is_safe_url(current_url):
-            raise ValueError(
-                f"URL blocked by SSRF protection (private/internal address): {current_url}"
-            )
-        chunks: list[bytes] = []
-        total = 0
-        with httpx.stream(
-            "GET",
-            current_url,
-            headers={"User-Agent": "hermes-kanban/attach"},
-            timeout=30,
-            follow_redirects=False,
-        ) as resp:
-            if resp.is_redirect:
-                location = resp.headers.get("location")
-                if not location:
-                    raise ValueError(f"redirect without Location header from {current_url}")
-                current_url = urljoin(current_url, location)
-                continue
-            resp.raise_for_status()
-            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip() or None
-            for chunk in resp.iter_bytes(1024 * 1024):
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError(
-                        f"attachment exceeds {max_bytes // (1024 * 1024)} MB limit"
-                    )
-                chunks.append(chunk)
-        return b"".join(chunks), content_type
+    with create_ssrf_safe_client(
+        headers={"User-Agent": "hermes-kanban/attach"},
+        timeout=30,
+        follow_redirects=False,
+    ) as client:
+        for _ in range(_MAX_ATTACH_URL_REDIRECTS + 1):
+            scheme = (urlparse(current_url).scheme or "").lower()
+            if scheme not in ("http", "https"):
+                raise ValueError(
+                    f"unsupported URL scheme {scheme!r}; only http/https are allowed"
+                )
+            if not is_safe_url(current_url):
+                raise ValueError(
+                    f"URL blocked by SSRF protection (private/internal address): {current_url}"
+                )
+            chunks: list[bytes] = []
+            total = 0
+            with client.stream("GET", current_url) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise ValueError(
+                            f"redirect without Location header from {current_url}"
+                        )
+                    current_url = urljoin(current_url, location)
+                    continue
+                resp.raise_for_status()
+                content_type = (
+                    (resp.headers.get("content-type") or "").split(";")[0].strip()
+                    or None
+                )
+                for chunk in resp.iter_bytes(1024 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(
+                            f"attachment exceeds {max_bytes // (1024 * 1024)} MB limit"
+                        )
+                    chunks.append(chunk)
+            return b"".join(chunks), content_type
     raise ValueError(f"too many redirects fetching {url}")
 
 
