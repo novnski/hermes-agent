@@ -404,14 +404,8 @@ async def test_wrapper_closes_inner_generator_and_frees_the_lock(tmp_path, monke
     gc.collect()
     await asyncio.sleep(0.1)
 
-    assert not provider.context.lock.locked(), (
-        "context.lock is still held after the flow was closed: the inner SDK "
-        "generator was abandoned instead of closed, so its release ran in a "
-        "foreign task and anyio refused it. Every subsequent request through "
-        "this cached provider will now deadlock before issuing any HTTP."
-    )
-
-    # And prove the provider is actually reusable, which is the property that
-    # was really lost — the lock being free is only the proxy for it.
+    # Prove the provider is actually reusable. MCP SDK releases can expose the
+    # context gate as either an AnyIO Lock or Semaphore, so acquisition is the
+    # portable invariant; only Lock implements ``locked()`` across all versions.
     await asyncio.wait_for(provider.context.lock.acquire(), timeout=2.0)
     provider.context.lock.release()
