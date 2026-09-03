@@ -261,7 +261,7 @@ def test_busy_steer_replaces_historical_user_anchor_after_compression():
 
     outcome = _ensure_compressed_has_user_turn(original, compressed)
 
-    assert outcome == "steer_inserted"
+    assert outcome == "inserted"
     user_turns = [message for message in compressed if message.get("role") == "user"]
     assert [message["content"] for message in user_turns] == [
         "Cancel that deployment and inspect the logs instead."
@@ -479,7 +479,6 @@ def test_compress_context_todo_snapshot_stays_synthetic_across_two_boundaries(
     assert "Second boundary" in handoff["content"]
     assert "User asked:" not in handoff["content"]
     db.close()
-
 
 
 
