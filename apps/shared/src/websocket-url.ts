@@ -50,6 +50,7 @@ export function isGatewayHandshakeAuthFailure(error: unknown): boolean {
 
   if (error && typeof error === 'object') {
     const record = error as { error?: unknown; needsSessionToken?: unknown; statusCode?: unknown }
+
     if (record.needsSessionToken === true) {
       return true
     }

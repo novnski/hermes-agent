@@ -107,6 +107,7 @@ function handshakeConnectError(event: { code?: number; reason?: string }, fallba
 
   if (code === 4401 || code === 401 || code === 403) {
     const error = new Error(`WebSocket handshake failed: ${code}${reason ? ` ${reason}` : ''}`)
+
     ;(error as Error & { statusCode: number }).statusCode = 401
 
     return error
